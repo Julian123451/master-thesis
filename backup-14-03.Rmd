@@ -1,0 +1,3327 @@
+---
+title: "Data: Price and Security of Supply"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Packages
+
+```{r packages, results='hide'}
+library(tidyverse)
+library(dynlm)
+library(lubridate)
+library(zoo)
+library(stats)
+library(ggcorrplot)
+library(jtools)
+library(httr)
+library(jsonlite)
+library(tidyr)
+library(yahoofinancer)
+library(writexl)
+library(quantreg)
+library(caret)
+library(fpp3)
+library(tseries)
+library(olsrr)
+library(car)
+#library(sandwich)
+#library(AER)
+#library(systemfit)
+library(purrr)
+library(psych)
+library(data.table)
+library(BMRSr)
+
+setwd("~/Dropbox/NHH MASTER/Masteroppgaven/DATA")
+
+```
+
+
+# Forecasted Wind and Solar Germany (for_int)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r intermittent GE}
+
+#importing CSV
+for_2020 <- read_csv("forecasted_wind_solar/2020.csv")
+for_2021 <- read_csv("forecasted_wind_solar/2021.csv")
+for_2022 <- read_csv("forecasted_wind_solar/2022.csv")
+
+#changing colnames
+colnames(for_2020) <- c("date", "solar", "wind_off", "wind_on")
+colnames(for_2021) <- c("date", "solar", "wind_off", "wind_on")
+colnames(for_2022) <- c("date", "solar", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+for_2020 = for_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+for_2020["datetime"] <- dmy_hm(for_2020$time_1)
+for_2020["date"] <- date(for_2020$datetime)
+for_2020["hour"] <- hour(for_2020$datetime)
+for_2020 = for_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+for_2020 <- for_2020[-1]
+for_2020 <- for_2020[-1]
+
+for_2021 = for_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+for_2021["datetime"] <- dmy_hm(for_2021$time_1)
+for_2021["date"] <- date(for_2021$datetime)
+for_2021["hour"] <- hour(for_2021$datetime)
+for_2021 = for_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+for_2021 <- for_2021[-1]
+for_2021 <- for_2021[-1]
+
+for_2022 = for_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+for_2022["datetime"] <- dmy_hm(for_2022$time_1)
+for_2022["date"] <- date(for_2022$datetime)
+for_2022["hour"] <- hour(for_2022$datetime)
+for_2022 = for_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+for_2022 <- for_2022[-1]
+for_2022 <- for_2022[-1]
+
+#changing character classes to numeric
+for_2020$solar <- as.numeric(for_2020$solar)
+for_2020$wind_off <- as.numeric(for_2020$wind_off)
+for_2020$wind_on <- as.numeric(for_2020$wind_on)
+for_2020$year <- as.numeric(for_2020$year)
+for_2020$month <- as.numeric(for_2020$month)
+for_2020$day <- as.numeric(for_2020$day)
+
+for_2021$solar <- as.numeric(for_2021$solar)
+for_2021$wind_off <- as.numeric(for_2021$wind_off)
+for_2021$wind_on <- as.numeric(for_2021$wind_on)
+for_2021$year <- as.numeric(for_2021$year)
+for_2021$month <- as.numeric(for_2021$month)
+for_2021$day <- as.numeric(for_2021$day)
+
+for_2022$solar <- as.numeric(for_2022$solar)
+for_2022$wind_off <- as.numeric(for_2022$wind_off)
+for_2022$wind_on <- as.numeric(for_2022$wind_on)
+for_2022$year <- as.numeric(for_2022$year)
+for_2022$month <- as.numeric(for_2022$month)
+for_2022$day <- as.numeric(for_2022$day)
+
+#merging to one dataset
+for_int <- rbind(for_2020, for_2021, for_2022)
+
+#calculate mean values for each hour
+for_int <- for_int %>% group_by(year, month, day, hour) %>% mutate(
+  solar = sum(solar),
+  wind_off = sum(wind_off),
+  wind_on = sum(wind_on)
+)
+
+#removes duplicate values which merges to hourly resolution
+for_int <- for_int %>% distinct(solar, wind_off, wind_on)
+
+#create a new datetime variable
+for_int <- for_int %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+#create categorical variable
+for_int <- for_int %>% mutate(
+  intermit_DE = solar + wind_off + wind_on,
+  intermit_DE = intermit_DE*0.25
+)
+
+#country specific colnames
+colnames(for_int) <- c("solar_DE", "wind_off_DE", "wind_on_DE", "year", "month", "day", "hour", "datetime", "intermit_DE")
+
+#display data
+head(for_int, 10)
+
+```
+
+
+# Generation by Production Type Germany (gen_prod)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r production GE}
+gen_2020 <- read_csv("generation_prod_type/2020.csv")
+gen_2021 <- read_csv("generation_prod_type/2021.csv")
+gen_2022 <- read_csv("generation_prod_type/2022.csv")
+
+#changing colnames
+colnames(gen_2020) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(gen_2021) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(gen_2022) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+gen_2020 = gen_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_2020["datetime"] <- dmy_hm(gen_2020$time_1)
+gen_2020["date"] <- date(gen_2020$datetime)
+gen_2020["hour"] <- hour(gen_2020$datetime)
+gen_2020 = gen_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_2020 <- gen_2020[-1]
+gen_2020 <- gen_2020[-1]
+
+gen_2021 = gen_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_2021["datetime"] <- dmy_hm(gen_2021$time_1)
+gen_2021["date"] <- date(gen_2021$datetime)
+gen_2021["hour"] <- hour(gen_2021$datetime)
+gen_2021 = gen_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_2021 <- gen_2021[-1]
+gen_2021 <- gen_2021[-1]
+
+gen_2022 = gen_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_2022["datetime"] <- dmy_hm(gen_2022$time_1)
+gen_2022["date"] <- date(gen_2022$datetime)
+gen_2022["hour"] <- hour(gen_2022$datetime)
+gen_2022 = gen_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_2022 <- gen_2022[-1]
+gen_2022 <- gen_2022[-1]
+
+#selecting variables
+gen_2020 <- gen_2020 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+gen_2021 <- gen_2021 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+gen_2022 <- gen_2022 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+#changing classes from character to numeric
+gen_2020$year <- as.numeric(gen_2020$year)
+gen_2020$month <- as.numeric(gen_2020$month)
+gen_2020$day <- as.numeric(gen_2020$day)
+gen_2020$hour <- as.numeric(gen_2020$hour)
+
+gen_2021$year <- as.numeric(gen_2021$year)
+gen_2021$month <- as.numeric(gen_2021$month)
+gen_2021$day <- as.numeric(gen_2021$day)
+gen_2021$hour <- as.numeric(gen_2021$hour)
+
+gen_2022$year <- as.numeric(gen_2022$year)
+gen_2022$month <- as.numeric(gen_2022$month)
+gen_2022$day <- as.numeric(gen_2022$day)
+gen_2022$hour <- as.numeric(gen_2022$hour)
+
+gen_prod <- rbind(gen_2020, gen_2021, gen_2022)
+
+gen_prod <- gen_prod %>% group_by(year, month, day, hour) %>% mutate(
+  biomass = sum(biomass),
+  b_coal = sum(b_coal),
+  gas = sum(gas),
+  h_coal = sum(h_coal),
+  oil = sum(oil),
+  geo = sum(geo),
+  hydro_pump = sum(hydro_pump),
+  hydro_river = sum(hydro_river),
+  hydro_res = sum(hydro_res),
+  nuclear = sum(nuclear),
+  other = sum(other),
+  other_renew = sum(other_renew),
+  waste = sum(waste)
+)
+
+gen_prod <- gen_prod %>% distinct(biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste)
+
+#create a new datetime variable
+gen_prod <- gen_prod %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+#categorize production types
+gen_prod <- gen_prod %>% mutate(
+  non_renew_DE = b_coal + gas + h_coal + oil + other,
+  renew_DE = biomass + hydro_pump + hydro_river + hydro_res + geo + waste + other_renew + nuclear
+)
+
+gen_prod <- gen_prod %>% select(datetime, year, month, day, hour, non_renew_DE, renew_DE)
+
+#display data
+head(gen_prod, 10)
+
+```
+
+# Price in Germany (price_DE)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r price_DE}
+
+#importing CSV
+p_2020 <- read_csv("day_ahead_price_DE/2020.csv")
+p_2021 <- read_csv("day_ahead_price_DE/2021.csv")
+p_2022 <- read_csv("day_ahead_price_DE/2022.csv")
+
+#changing colnames
+colnames(p_2020) <- c("date", "price", "currency", "area")
+colnames(p_2021) <- c("date", "price", "currency", "area")
+colnames(p_2022) <- c("date", "price", "currency", "area")
+
+#creating date variables for grouping and averaging to hourly res
+p_2020 = p_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+p_2020["datetime"] <- dmy_hm(p_2020$time_1)
+p_2020["date"] <- date(p_2020$datetime)
+p_2020["hour"] <- hour(p_2020$datetime)
+p_2020 = p_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+p_2020 <- p_2020[-1]
+p_2020 <- p_2020[-1]
+
+p_2021 = p_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+p_2021["datetime"] <- dmy_hm(p_2021$time_1)
+p_2021["date"] <- date(p_2021$datetime)
+p_2021["hour"] <- hour(p_2021$datetime)
+p_2021 = p_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+p_2021 <- p_2021[-1]
+p_2021 <- p_2021[-1]
+
+p_2022 = p_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+p_2022["datetime"] <- dmy_hm(p_2022$time_1)
+p_2022["date"] <- date(p_2022$datetime)
+p_2022["hour"] <- hour(p_2022$datetime)
+p_2022 = p_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+p_2022 <- p_2022[-1]
+p_2022 <- p_2022[-1]
+
+#merging to one dataset
+price_DE <- rbind(p_2020, p_2021, p_2022)
+
+#selecting variables
+price_DE <- price_DE %>% select(price, datetime, year, month, day, hour)
+
+#fixing classes from character
+price_DE$year <- as.numeric(price_DE$year)
+price_DE$month <- as.numeric(price_DE$month)
+price_DE$day <- as.numeric(price_DE$day)
+
+colnames(price_DE) <- c("price_DE", "datetime", "year", "month", "day", "hour")
+
+#display data
+head(price_DE, 10)
+
+```
+
+# Generation by Production Type England (for_GB)
+Source: Elexon BSC
+
+Resolution: hourly
+
+NB: not day-ahead
+
+```{r generation_GB}
+
+#importing CSV
+for_GB <- read_csv("intermittent_GB/all.csv")
+
+#select variables
+for_GB <- for_GB %>% select(StartTime, FuelType, Generation)
+
+#changing colnames
+colnames(for_GB) <- c("date", "type", "gen")
+
+#pivot to wider format
+for_GB <- for_GB %>% pivot_wider(names_from = type, values_from = gen)
+
+#creating date variables for grouping and averaging to hourly res
+for_GB["datetime"] <- ymd_hms(for_GB$date)
+for_GB["date"] <- date(for_GB$datetime)
+for_GB["hour"] <- hour(for_GB$datetime)
+for_GB = for_GB %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+
+#filtering out time period
+for_GB <- for_GB %>% filter(year>=2020 & year<=2022)
+
+#changing character classes to numeric
+for_GB$year <- as.numeric(for_GB$year)
+for_GB$month <- as.numeric(for_GB$month)
+for_GB$day <- as.numeric(for_GB$day)
+
+#selecting variables
+for_GB <- for_GB %>% select(year, month, day, hour, datetime, CCGT, COAL, NPSHYD, NUCLEAR, OCGT, OIL, OTHER, WIND, BIOMASS)
+
+#changing colnames again
+colnames(for_GB) <- c("year", "month", "day", "hour", "datetime", "CCGT", "coal", "hydro_other", "nuclear", "OCGT", "oil", "other", "wind", "biomass")
+
+#calculate mean values for each hour
+for_GB <- for_GB %>% group_by(year, month, day, hour) %>% mutate(
+  CCGT = sum(CCGT),
+  coal = sum(coal),
+  hydro_other = sum(hydro_other),
+  nuclear = sum(nuclear),
+  OCGT = sum(OCGT),
+  oil = sum(oil),
+  other = sum(other),
+  wind_GB = sum(wind),
+  biomass = sum(biomass)
+)
+
+#removes duplicate values which merges to hourly resolution
+for_GB <- for_GB %>% distinct(year, month, day, hour, .keep_all = TRUE)
+
+#create a new datetime variable
+for_GB <- for_GB %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+#create categorical variables
+for_GB <- for_GB %>% mutate(
+  non_renew_GB = CCGT + coal + OCGT + oil + other,
+  renew_GB = hydro_other + biomass + nuclear,
+  intermit_GB = wind_GB
+)
+
+for_GB <- for_GB %>% select(year, month, day, hour, datetime, non_renew_GB, renew_GB, intermit_GB, wind_GB)
+
+#display data
+head(for_GB, 10)
+
+```
+
+
+# PV generation in England (PV_GB)
+Source: National Grid ESO
+
+Resolution: Hourly
+
+```{r PVGB}
+pvgb_2020 <- read_csv("intermittent_GB/2020.csv")
+pvgb_2021 <- read_csv("intermittent_GB/2021.csv")
+pvgb_2022 <- read_csv("intermittent_GB/2022.csv")
+
+pvgb_2020 <- pvgb_2020 %>% select(datetime_gmt, generation_mw)
+pvgb_2021 <- pvgb_2021 %>% select(datetime_gmt, generation_mw)
+pvgb_2022 <- pvgb_2022 %>% select(datetime_gmt, generation_mw)
+
+colnames(pvgb_2020) <- c("datetime", "PV_GB")
+colnames(pvgb_2021) <- c("datetime", "PV_GB")
+colnames(pvgb_2022) <- c("datetime", "PV_GB")
+
+#creating date variables for grouping and averaging to hourly res
+pvgb_2020$datetime <- ymd_hms(pvgb_2020$datetime)
+pvgb_2020["year"] <- year(pvgb_2020$datetime)
+pvgb_2020["month"] <- month(pvgb_2020$datetime)
+pvgb_2020["day"] <- day(pvgb_2020$datetime)
+pvgb_2020["hour"] <- hour(pvgb_2020$datetime)
+
+#creating date variables for grouping and averaging to hourly res
+pvgb_2021$datetime <- ymd_hms(pvgb_2021$datetime)
+pvgb_2021["year"] <- year(pvgb_2021$datetime)
+pvgb_2021["month"] <- month(pvgb_2021$datetime)
+pvgb_2021["day"] <- day(pvgb_2021$datetime)
+pvgb_2021["hour"] <- hour(pvgb_2021$datetime)
+
+#creating date variables for grouping and averaging to hourly res
+pvgb_2022$datetime <- ymd_hms(pvgb_2022$datetime)
+pvgb_2022["year"] <- year(pvgb_2022$datetime)
+pvgb_2022["month"] <- month(pvgb_2022$datetime)
+pvgb_2022["day"] <- day(pvgb_2022$datetime)
+pvgb_2022["hour"] <- hour(pvgb_2022$datetime)
+
+#combine
+PV_GB <- rbind(pvgb_2020, pvgb_2021, pvgb_2022)
+
+PV_GB <- PV_GB %>% group_by(year, month, day, hour) %>% mutate(
+  PV_GB = mean(PV_GB)
+)
+
+PV_GB <- PV_GB %>% distinct(PV_GB, .keep_all = TRUE)
+
+PV_GB <- PV_GB %>% mutate(
+  datetime = make_datetime(year = year, month = month, day = day, hour = hour)
+)
+
+```
+
+# Generation by Production Type Norway (prod_NO)
+Source: ENTSO-E
+
+Resolution: hourly
+
+
+```{r production NO}
+prod_2020 <- read_csv("generation_NO/2020.csv")
+prod_2021 <- read_csv("generation_NO/2021.csv")
+prod_2022 <- read_csv("generation_NO/2022.csv")
+
+#changing colnames
+colnames(prod_2020) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(prod_2021) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(prod_2022) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+prod_2020 = prod_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+prod_2020["datetime"] <- dmy_hm(prod_2020$time_1)
+prod_2020["date"] <- date(prod_2020$datetime)
+prod_2020["hour"] <- hour(prod_2020$datetime)
+prod_2020 = prod_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+prod_2020 <- prod_2020[-1]
+prod_2020 <- prod_2020[-1]
+
+prod_2021 = prod_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+prod_2021["datetime"] <- dmy_hm(prod_2021$time_1)
+prod_2021["date"] <- date(prod_2021$datetime)
+prod_2021["hour"] <- hour(prod_2021$datetime)
+prod_2021 = prod_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+prod_2021 <- prod_2021[-1]
+prod_2021 <- prod_2021[-1]
+
+prod_2022 = prod_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+prod_2022["datetime"] <- dmy_hm(prod_2022$time_1)
+prod_2022["date"] <- date(prod_2022$datetime)
+prod_2022["hour"] <- hour(prod_2022$datetime)
+prod_2022 = prod_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+prod_2022 <- prod_2022[-1]
+prod_2022 <- prod_2022[-1]
+
+#selecting variables
+prod_2020 <- prod_2020 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+prod_2021 <- prod_2021 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+prod_2022 <- prod_2022 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+#changing classes from character to numeric
+prod_2020$year <- as.numeric(prod_2020$year)
+prod_2020$month <- as.numeric(prod_2020$month)
+prod_2020$day <- as.numeric(prod_2020$day)
+prod_2020$hour <- as.numeric(prod_2020$hour)
+
+prod_2021$year <- as.numeric(prod_2021$year)
+prod_2021$month <- as.numeric(prod_2021$month)
+prod_2021$day <- as.numeric(prod_2021$day)
+prod_2021$hour <- as.numeric(prod_2021$hour)
+
+prod_2022$year <- as.numeric(prod_2022$year)
+prod_2022$month <- as.numeric(prod_2022$month)
+prod_2022$day <- as.numeric(prod_2022$day)
+prod_2022$hour <- as.numeric(prod_2022$hour)
+
+#combine
+prod_NO <- rbind(prod_2020, prod_2021, prod_2022)
+
+#select variables
+prod_NO <- prod_NO %>% select(datetime, year, month, day, hour, gas, hydro_river, hydro_pump, hydro_res, other)
+
+#remove character n/e and N/A
+prod_NO <- prod_NO %>% mutate(
+  hydro_pump = ifelse(hydro_pump=="n/e" | hydro_pump=="N/A", 0, hydro_pump),
+  gas = ifelse(hydro_pump=="N/A", 0, gas)
+)
+
+#changing class from character to numeric
+prod_NO$gas <- as.numeric(prod_NO$gas)
+prod_NO$hydro_pump <- as.numeric(prod_NO$hydro_pump)
+
+#categorize production types
+prod_NO <- prod_NO %>% mutate(
+  non_renew_NO = gas + other,
+  renew_NO = hydro_pump + hydro_river + hydro_res
+)
+
+#display data
+head(prod_NO, 10)
+
+```
+
+# Forecasted Wind and Solar Norway (for_NO)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r intermittent NO}
+
+#importing CSV
+int_2020 <- read_csv("intermittent_NO/2020.csv")
+int_2021 <- read_csv("intermittent_NO/2021.csv")
+int_2022 <- read_csv("intermittent_NO/2022.csv")
+
+#changing colnames
+colnames(int_2020) <- c("date", "solar", "wind_off", "wind_on")
+colnames(int_2021) <- c("date", "solar", "wind_off", "wind_on")
+colnames(int_2022) <- c("date", "solar", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+int_2020 = int_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+int_2020["datetime"] <- dmy_hm(int_2020$time_1)
+int_2020["date"] <- date(int_2020$datetime)
+int_2020["hour"] <- hour(int_2020$datetime)
+int_2020 = int_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+int_2020 <- int_2020[-1]
+int_2020 <- int_2020[-1]
+
+int_2021 = int_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+int_2021["datetime"] <- dmy_hm(int_2021$time_1)
+int_2021["date"] <- date(int_2021$datetime)
+int_2021["hour"] <- hour(int_2021$datetime)
+int_2021 = int_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+int_2021 <- int_2021[-1]
+int_2021 <- int_2021[-1]
+
+int_2022 = int_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+int_2022["datetime"] <- dmy_hm(int_2022$time_1)
+int_2022["date"] <- date(int_2022$datetime)
+int_2022["hour"] <- hour(int_2022$datetime)
+int_2022 = int_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+int_2022 <- int_2022[-1]
+int_2022 <- int_2022[-1]
+
+#changing character classes to numeric
+int_2020$solar <- as.numeric(int_2020$solar)
+int_2020$wind_off <- as.numeric(int_2020$wind_off)
+int_2020$wind_on <- as.numeric(int_2020$wind_on)
+int_2020$year <- as.numeric(int_2020$year)
+int_2020$month <- as.numeric(int_2020$month)
+int_2020$day <- as.numeric(int_2020$day)
+
+int_2021$solar <- as.numeric(int_2021$solar)
+int_2021$wind_off <- as.numeric(int_2021$wind_off)
+int_2021$wind_on <- as.numeric(int_2021$wind_on)
+int_2021$year <- as.numeric(int_2021$year)
+int_2021$month <- as.numeric(int_2021$month)
+int_2021$day <- as.numeric(int_2021$day)
+
+int_2022$solar <- as.numeric(int_2022$solar)
+int_2022$wind_off <- as.numeric(int_2022$wind_off)
+int_2022$wind_on <- as.numeric(int_2022$wind_on)
+int_2022$year <- as.numeric(int_2022$year)
+int_2022$month <- as.numeric(int_2022$month)
+int_2022$day <- as.numeric(int_2022$day)
+
+#merging to one dataset
+for_NO <- rbind(int_2020, int_2021, int_2022)
+
+#create categorical variable
+for_NO <- for_NO %>% mutate(
+  intermit_NO = solar + wind_off + wind_on
+)
+
+colnames(for_NO) <- c("solar_NO", "wind_off_NO", "wind_on_NO", "datetime", "year", "month", "day", "hour", "intermit_NO")
+
+#display data
+head(for_NO, 10)
+
+```
+
+
+# Reservoir Norway (mag_data)
+Source: NVE API
+
+Resolution: weekly
+
+When joining weekly reservoir data with other datasets remember *fulljoin() %>% na.locf()*.
+
+```{r reservoir NO}
+
+#import from API
+mag_GET = GET("https://biapi.nve.no/magasinstatistikk/api/Magasinstatistikk/HentOffentligData")
+mag_data = fromJSON(rawToChar(mag_GET$content))
+
+#filter dates
+mag_data <- mag_data %>% filter(omrType=="EL", iso_aar>=2020 & iso_aar<2023)
+
+#create datevariable
+mag_data["datetime"] <- ymd(mag_data$dato_Id)
+
+#selecting variables
+mag_data <- mag_data %>% select(fyllingsgrad, kapasitet_TWh, omrnr, fylling_TWh, endring_fyllingsgrad, datetime)
+
+#removing one 2023 obs
+mag_data <- mag_data %>% dplyr::filter(year(datetime) <= 2022)
+
+#transforming data to wider format
+mag_data <- mag_data %>% select(datetime, omrnr, fyllingsgrad, kapasitet_TWh) %>% pivot_wider(names_from = omrnr, values_from = c(fyllingsgrad, kapasitet_TWh))
+
+#changing colnames
+colnames(mag_data) <- c("datetime", "NO3", "NO1", "NO2", "NO5", "NO4", "TWh_NO3", "TWh_NO1", "TWh_NO2", "TWh_NO5", "TWh_NO4")
+
+#taking the mean of total
+mag_data <- mag_data %>% group_by(datetime) %>% mutate(
+  fyllingsgrad = mean(NO1, NO2, NO3, NO4, NO4),
+  MWh_NO2 = TWh_NO2*1000000,
+  NO2 = MWh_NO2*NO2
+)
+
+mag_data <- mag_data %>% select(datetime, fyllingsgrad, NO2)
+
+#interpolating
+mag_data$datetime <- as.POSIXct(mag_data$datetime)
+
+hour_dat <- data.frame(datetime=seq(as.POSIXct("2020-01-05"), as.POSIXct("2022-12-25"), by="1 hour"))
+
+mag_data <- merge(mag_data, hour_dat, all=TRUE) 
+
+mag_data[-1] <- lapply(mag_data[-1], \(y) approx(mag_data$datetime, y, xout=mag_data$datetime)$y)
+
+#display data
+head(mag_data, 10)
+
+```
+
+
+# Hydrological NO2 (hlf_data)
+Source: Frost API, Meterologisk Institutt
+
+Resolution: daily
+
+Wind speed: m/s
+Precipitation: mm
+Temperature: Celcius
+
+```{r hydrological NO}
+#client_id from API
+client_id = 'c3eecf1e-92f2-4702-b42d-1dbadc58020e'
+
+#choosing parameters
+endpoint <- paste0("https://", client_id, "@frost.met.no/observations/v0.jsonld")
+
+#weather station IDs
+sources <- 'SN36330, SN40510, SN39750, SN40420, SN36010, SN38150, SN38250, SN39212, SN41795, SN42700, SN41005, SN41990, SN42490, SN44985, SN35110, SN35210, SN40880, SN39040, SN39150, SN38140, SN41175, SN41770, SN42160, SN41825, SN35860, SN41090, SN36560, SN39100, SN37070, SN40405, SN39450, SN40005, SN40905, SN39520, SN42940, SN42930, SN36200, SN40250, SN41480'
+
+#choosing hydrological variables
+elements <- 'mean(air_temperature P1D),sum(precipitation_amount P1D),mean(wind_speed P1D)'
+
+#time frame
+referenceTime <- '2020-01-01/2022-12-31'
+
+#add elements to send to API
+url <- paste0(
+  endpoint, "?",
+  "sources=", sources,
+  "&referencetime=", referenceTime,
+  "&elements=", elements
+)
+
+#issue an HTTP GET request and extract JSON data
+xs <- try(fromJSON(URLencode(url),flatten=T))
+
+#checking if the request worked, print out any errors
+if (class(xs) != 'try-error') {
+  df <- unnest(xs$data)
+  print("OK")
+} else {
+  print("error")
+}
+
+#changing colnames
+colnames(df) <- c("WID", "datetime", "variable", "value", "unit", "time_off", "time_res", "ts_ID", "perf_cat", "exp_cat", "quality_code", "level_type", "level_unit", "level_value")
+
+#choosing a set of variables
+hlf_data <- df %>% dplyr::select(WID, datetime, variable, value)
+
+#creating date variable
+hlf_data = hlf_data %>% separate(datetime, into=c("time_1", "time_2"), sep="T", remove=TRUE)
+
+#changing class to date
+hlf_data["datetime"] <- ymd(hlf_data$time_1)
+
+#removing second duplicated variable
+hlf_data <- hlf_data %>% distinct(datetime, variable, .keep_all = TRUE)
+
+#from longer to wider format
+hlf_data <- hlf_data %>% pivot_wider(names_from = variable, values_from = value, names_repair = "check_unique")
+
+colnames(hlf_data) <- c("WID", "time_1", "time_2", "datetime", "temp", "precip", "wind_speed")
+
+#deleting some date variables
+hlf_data <- hlf_data %>% dplyr::select(datetime, temp, precip, wind_speed)
+
+#unnesting list types within dataframe to numeric variables
+hlf_data <- hlf_data %>% unchop(c(temp, precip, wind_speed))
+
+#remove character n/e and N/A
+hlf_data <- hlf_data %>% mutate(
+  precip = ifelse(precip=="NaN", 0, precip),
+  temp = ifelse(temp=="NaN", 0, temp)
+)
+
+#averaging all values
+hlf_data <- hlf_data %>% group_by(datetime) %>% mutate(
+  temp = mean(temp, na.rm = TRUE),
+  precip = mean(precip, na.rm = TRUE),
+  wind_speed = mean(wind_speed, na.rm = TRUE)
+)
+
+#display data
+head(hlf_data, 10)
+
+```
+
+
+# Consumption in NO2 (cons_NO2)
+Source: ENTSO-E
+
+Resolution: hourly
+
+This dataset could easily be changed to total consumption in Norway and not just in NO2.
+
+```{r consumption NO2}
+
+#import csv
+cons_2020 <- read_csv("consumption_NO/2020.csv")
+cons_2021 <- read_csv("consumption_NO/2021.csv")
+cons_2022 <- read_csv("consumption_NO/2022.csv")
+
+#changing colnames
+colnames(cons_2020) <- c("datetime", "demand", "cons")
+colnames(cons_2021) <- c("datetime", "demand", "cons")
+colnames(cons_2022) <- c("datetime", "demand", "cons")
+
+#creating date variables for grouping and averaging to hourly res
+cons_2020 = cons_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+cons_2020["datetime"] <- dmy_hm(cons_2020$time_1)
+cons_2020["date"] <- date(cons_2020$datetime)
+cons_2020["hour"] <- hour(cons_2020$datetime)
+cons_2020 = cons_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+cons_2020 <- cons_2020[-1]
+cons_2020 <- cons_2020[-1]
+
+cons_2021 = cons_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+cons_2021["datetime"] <- dmy_hm(cons_2021$time_1)
+cons_2021["date"] <- date(cons_2021$datetime)
+cons_2021["hour"] <- hour(cons_2021$datetime)
+cons_2021 = cons_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+cons_2021 <- cons_2021[-1]
+cons_2021 <- cons_2021[-1]
+
+cons_2022 = cons_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+cons_2022["datetime"] <- dmy_hm(cons_2022$time_1)
+cons_2022["date"] <- date(cons_2022$datetime)
+cons_2022["hour"] <- hour(cons_2022$datetime)
+cons_2022 = cons_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+cons_2022 <- cons_2022[-1]
+cons_2022 <- cons_2022[-1]
+
+#combine all years
+cons_NO2 <- rbind(cons_2020, cons_2021, cons_2022)
+
+#select relevant variables
+cons_NO2 <- cons_NO2 %>% dplyr::select(datetime, year, month, day, hour, demand)
+
+cons_NO2$year <- as.numeric(cons_NO2$year)
+cons_NO2$month <- as.numeric(cons_NO2$month)
+cons_NO2$day <- as.numeric(cons_NO2$day)
+
+#display data
+head(cons_NO2, 10)
+
+```
+
+
+# Day-ahead Prices in NO2 (price_NO2)
+Source: ENTSO-E
+
+Resolution: hourly
+
+Could use either ENTSO-E or NordPool as source.
+
+```{r day ahead NO2}
+
+#import csv
+price_2020 <- read_csv("day_ahead_price_NO2/2020.csv")
+price_2021 <- read_csv("day_ahead_price_NO2/2021.csv")
+price_2022 <- read_csv("day_ahead_price_NO2/2022.csv")
+
+#changing colnames
+colnames(price_2020) <- c("datetime", "price", "currency", "area")
+colnames(price_2021) <- c("datetime", "price", "currency", "area")
+colnames(price_2022) <- c("datetime", "price", "currency", "area")
+
+#creating date variables for grouping and averaging to hourly res
+price_2020 = price_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+price_2020["datetime"] <- dmy_hm(price_2020$time_1)
+price_2020["date"] <- date(price_2020$datetime)
+price_2020["hour"] <- hour(price_2020$datetime)
+price_2020 = price_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+price_2020 <- price_2020[-1]
+price_2020 <- price_2020[-1]
+
+price_2021 = price_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+price_2021["datetime"] <- dmy_hm(price_2021$time_1)
+price_2021["date"] <- date(price_2021$datetime)
+price_2021["hour"] <- hour(price_2021$datetime)
+price_2021 = price_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+price_2021 <- price_2021[-1]
+price_2021 <- price_2021[-1]
+
+price_2022 = price_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+price_2022["datetime"] <- dmy_hm(price_2022$time_1)
+price_2022["date"] <- date(price_2022$datetime)
+price_2022["hour"] <- hour(price_2022$datetime)
+price_2022 = price_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+price_2022 <- price_2022[-1]
+price_2022 <- price_2022[-1]
+
+#combining all years
+price_NO2 <- rbind(price_2020, price_2021, price_2022)
+
+#selecting variables
+price_NO2 <- price_NO2 %>% dplyr::select(price, datetime, year, month, day, hour)
+
+#fixing classes from character
+price_NO2$year <- as.numeric(price_NO2$year)
+price_NO2$month <- as.numeric(price_NO2$month)
+price_NO2$day <- as.numeric(price_NO2$day)
+
+colnames(price_NO2) <- c("price_NO2", "datetime", "year", "month", "day", "hour")
+
+#display data
+head(price_NO2, 10)
+
+
+```
+
+
+# Net export Norway NordLink (NX_data)
+Source: ENTSO-E
+
+```{r NX_NL}
+
+#import csv
+NX_2020 <- read_delim("NX_NL/2020.csv")
+NX_2021 <- read_csv("NX_NL/2021.csv")
+NX_2022 <- read_csv("NX_NL/2022.csv")
+
+#changing colnames
+colnames(NX_2020) <- c("datetime", "imp_DE", "actual", "exp_DE", "actual_x")
+colnames(NX_2021) <- c("datetime", "imp_DE", "actual", "exp_DE", "actual_x")
+colnames(NX_2022) <- c("datetime", "imp_DE", "actual", "exp_DE", "actual_x")
+
+#creating date variables for grouping and averaging to hourly res
+NX_2020 = NX_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NX_2020["datetime"] <- dmy_hm(NX_2020$time_1)
+NX_2020["date"] <- date(NX_2020$datetime)
+NX_2020["hour"] <- hour(NX_2020$datetime)
+NX_2020 = NX_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NX_2020 <- NX_2020[-1]
+NX_2020 <- NX_2020[-1]
+
+NX_2021 = NX_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NX_2021["datetime"] <- dmy_hm(NX_2021$time_1)
+NX_2021["date"] <- date(NX_2021$datetime)
+NX_2021["hour"] <- hour(NX_2021$datetime)
+NX_2021 = NX_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NX_2021 <- NX_2021[-1]
+NX_2021 <- NX_2021[-1]
+
+NX_2022 = NX_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NX_2022["datetime"] <- dmy_hm(NX_2022$time_1)
+NX_2022["date"] <- date(NX_2022$datetime)
+NX_2022["hour"] <- hour(NX_2022$datetime)
+NX_2022 = NX_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NX_2022 <- NX_2022[-1]
+NX_2022 <- NX_2022[-1]
+
+#combining
+NX_data <- rbind(NX_2020, NX_2021, NX_2022)
+
+#fixing classes
+NX_data$year <- as.numeric(NX_data$year)
+NX_data$month <- as.numeric(NX_data$month)
+NX_data$day <- as.numeric(NX_data$day)
+
+NX_data <- NX_data %>% select(datetime, year, month, day, hour, imp_DE, exp_DE)
+
+#display data
+head(NX_data, 10)
+
+```
+
+# Net export Norway North Sea Link (NSL_data)
+Source: ENTSO-E
+
+```{r NX_NSL}
+
+#import csv
+NSL_2020 <- read_delim("NX_NSL/2020.csv")
+NSL_2021 <- read_delim("NX_NSL/2021.csv")
+NSL_2022 <- read_csv("NX_NSL/2022.csv")
+
+#changing colnames
+colnames(NSL_2020) <- c("datetime", "imp_GB", "actual", "exp_GB", "actual_x")
+colnames(NSL_2021) <- c("datetime", "imp_GB", "actual", "exp_GB", "actual_x")
+colnames(NSL_2022) <- c("datetime", "imp_GB", "actual", "exp_GB", "actual_x")
+
+#creating date variables for grouping and averaging to hourly res
+NSL_2020 = NSL_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NSL_2020["datetime"] <- dmy_hm(NSL_2020$time_1)
+NSL_2020["date"] <- date(NSL_2020$datetime)
+NSL_2020["hour"] <- hour(NSL_2020$datetime)
+NSL_2020 = NSL_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NSL_2020 <- NSL_2020[-1]
+NSL_2020 <- NSL_2020[-1]
+
+NSL_2021 = NSL_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NSL_2021["datetime"] <- dmy_hm(NSL_2021$time_1)
+NSL_2021["date"] <- date(NSL_2021$datetime)
+NSL_2021["hour"] <- hour(NSL_2021$datetime)
+NSL_2021 = NSL_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NSL_2021 <- NSL_2021[-1]
+NSL_2021 <- NSL_2021[-1]
+
+NSL_2022 = NSL_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NSL_2022["datetime"] <- dmy_hm(NSL_2022$time_1)
+NSL_2022["date"] <- date(NSL_2022$datetime)
+NSL_2022["hour"] <- hour(NSL_2022$datetime)
+NSL_2022 = NSL_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NSL_2022 <- NSL_2022[-1]
+NSL_2022 <- NSL_2022[-1]
+
+#combining
+NSL_data <- rbind(NSL_2020, NSL_2021, NSL_2022)
+
+#fixing classes
+NSL_data$year <- as.numeric(NSL_data$year)
+NSL_data$month <- as.numeric(NSL_data$month)
+NSL_data$day <- as.numeric(NSL_data$day)
+
+NSL_data <- NSL_data %>% select(datetime, year, month, day, hour, imp_GB, exp_GB)
+
+
+#display data
+head(NSL_data, 10)
+
+```
+
+
+# Natural Gas Future Price US (NG_data)
+Source: Bloomberg
+
+Resolution: daily
+
+```{r natural gas}
+
+#import csv
+NG_data <- read_csv("TTF_NG_futures.csv")
+
+#fixing date variable
+NG_data = NG_data %>% separate(Date, into=c("time_1", "time_2", "time_3"), sep="/", remove=TRUE)
+
+NG_data <- NG_data %>% mutate(
+  datetime = make_date(month=time_1, day=time_2, year=time_3)
+)
+
+#filter period
+NG_data <- NG_data %>% filter(datetime<"2022-12-31")
+
+#select variables
+NG_data <- NG_data %>% select(Price, datetime)
+
+#changing colnames
+colnames(NG_data) <- c("price_NG", "datetime")
+
+#display data
+head(NG_data, 10)
+
+```
+
+# Crude price (crude_data)
+Source: Bloomberg
+
+```{r crude}
+
+#import csv
+crude_data <- read_csv("crude_futures.csv")
+
+#fixing date variable
+crude_data = crude_data %>% separate(Date, into=c("time_1", "time_2", "time_3"), sep="/", remove=TRUE)
+
+crude_data <- crude_data %>% mutate(
+  datetime = make_date(month=time_1, day=time_2, year=time_3)
+)
+
+#filter period
+crude_data <- crude_data %>% filter(datetime<"2022-12-31")
+
+#select variables
+crude_data <- crude_data %>% select(Price, datetime)
+
+#changing colnames
+colnames(crude_data) <- c("price_crude", "datetime")
+
+#display data
+head(crude_data, 10)
+
+```
+
+# Forecasted Wind and Solar Netherlands (neth_int)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r intermittent NE}
+
+#importing CSV
+neth_2020 <- read_csv("intermittent_NL/2020.csv")
+neth_2021 <- read_csv("intermittent_NL/2021.csv")
+neth_2022 <- read_csv("intermittent_NL/2022.csv")
+
+#changing colnames
+colnames(neth_2020) <- c("date", "solar", "wind_off", "wind_on")
+colnames(neth_2021) <- c("date", "solar", "wind_off", "wind_on")
+colnames(neth_2022) <- c("date", "solar", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+neth_2020 = neth_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+neth_2020["datetime"] <- dmy_hm(neth_2020$time_1)
+neth_2020["date"] <- date(neth_2020$datetime)
+neth_2020["hour"] <- hour(neth_2020$datetime)
+neth_2020 = neth_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+neth_2020 <- neth_2020[-1]
+neth_2020 <- neth_2020[-1]
+
+neth_2021 = neth_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+neth_2021["datetime"] <- dmy_hm(neth_2021$time_1)
+neth_2021["date"] <- date(neth_2021$datetime)
+neth_2021["hour"] <- hour(neth_2021$datetime)
+neth_2021 = neth_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+neth_2021 <- neth_2021[-1]
+neth_2021 <- neth_2021[-1]
+
+neth_2022 = neth_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+neth_2022["datetime"] <- dmy_hm(neth_2022$time_1)
+neth_2022["date"] <- date(neth_2022$datetime)
+neth_2022["hour"] <- hour(neth_2022$datetime)
+neth_2022 = neth_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+neth_2022 <- neth_2022[-1]
+neth_2022 <- neth_2022[-1]
+
+#changing character classes to numeric
+neth_2020$solar <- as.numeric(neth_2020$solar)
+neth_2020$wind_off <- as.numeric(neth_2020$wind_off)
+neth_2020$wind_on <- as.numeric(neth_2020$wind_on)
+neth_2020$year <- as.numeric(neth_2020$year)
+neth_2020$month <- as.numeric(neth_2020$month)
+neth_2020$day <- as.numeric(neth_2020$day)
+
+neth_2021$solar <- as.numeric(neth_2021$solar)
+neth_2021$wind_off <- as.numeric(neth_2021$wind_off)
+neth_2021$wind_on <- as.numeric(neth_2021$wind_on)
+neth_2021$year <- as.numeric(neth_2021$year)
+neth_2021$month <- as.numeric(neth_2021$month)
+neth_2021$day <- as.numeric(neth_2021$day)
+
+neth_2022$solar <- as.numeric(neth_2022$solar)
+neth_2022$wind_off <- as.numeric(neth_2022$wind_off)
+neth_2022$wind_on <- as.numeric(neth_2022$wind_on)
+neth_2022$year <- as.numeric(neth_2022$year)
+neth_2022$month <- as.numeric(neth_2022$month)
+neth_2022$day <- as.numeric(neth_2022$day)
+
+#merging to one dataset
+neth_int <- rbind(neth_2020, neth_2021, neth_2022)
+
+#calculate mean values for each hour
+neth_int <- neth_int %>% group_by(year, month, day, hour) %>% mutate(
+  solar = sum(solar),
+  wind_off = sum(wind_off),
+  wind_on = sum(wind_on)
+)
+
+#removes duplicate values which merges to hourly resolution
+neth_int <- neth_int %>% distinct(solar, wind_off, wind_on)
+
+#create a new datetime variable
+neth_int <- neth_int %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+#create categorical variable
+neth_int <- neth_int %>% mutate(
+  intermit_NE = solar + wind_off + wind_on
+)
+
+#country specific colnames
+colnames(neth_int) <- c("solar_NE", "wind_off_NE", "wind_on_NE", "year", "month", "day", "hour", "datetime", "intermit_NE")
+
+#display data
+head(neth_int, 10)
+
+```
+
+# Forecasted Wind and Solar Denmark DK1 (dk1_int)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r intermittent DK}
+
+#importing CSV
+dk1_2020 <- read_csv("intermittent_DK1/2020.csv")
+dk1_2021 <- read_csv("intermittent_DK1/2021.csv")
+dk1_2022 <- read_csv("intermittent_DK1/2022.csv")
+
+#changing colnames
+colnames(dk1_2020) <- c("date", "solar", "wind_off", "wind_on")
+colnames(dk1_2021) <- c("date", "solar", "wind_off", "wind_on")
+colnames(dk1_2022) <- c("date", "solar", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+dk1_2020 = dk1_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+dk1_2020["datetime"] <- dmy_hm(dk1_2020$time_1)
+dk1_2020["date"] <- date(dk1_2020$datetime)
+dk1_2020["hour"] <- hour(dk1_2020$datetime)
+dk1_2020 = dk1_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+dk1_2020 <- dk1_2020[-1]
+dk1_2020 <- dk1_2020[-1]
+
+dk1_2021 = dk1_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+dk1_2021["datetime"] <- dmy_hm(dk1_2021$time_1)
+dk1_2021["date"] <- date(dk1_2021$datetime)
+dk1_2021["hour"] <- hour(dk1_2021$datetime)
+dk1_2021 = dk1_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+dk1_2021 <- dk1_2021[-1]
+dk1_2021 <- dk1_2021[-1]
+
+dk1_2022 = dk1_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+dk1_2022["datetime"] <- dmy_hm(dk1_2022$time_1)
+dk1_2022["date"] <- date(dk1_2022$datetime)
+dk1_2022["hour"] <- hour(dk1_2022$datetime)
+dk1_2022 = dk1_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+dk1_2022 <- dk1_2022[-1]
+dk1_2022 <- dk1_2022[-1]
+
+#changing character classes to numeric
+dk1_2020$solar <- as.numeric(dk1_2020$solar)
+dk1_2020$wind_off <- as.numeric(dk1_2020$wind_off)
+dk1_2020$wind_on <- as.numeric(dk1_2020$wind_on)
+dk1_2020$year <- as.numeric(dk1_2020$year)
+dk1_2020$month <- as.numeric(dk1_2020$month)
+dk1_2020$day <- as.numeric(dk1_2020$day)
+
+dk1_2021$solar <- as.numeric(dk1_2021$solar)
+dk1_2021$wind_off <- as.numeric(dk1_2021$wind_off)
+dk1_2021$wind_on <- as.numeric(dk1_2021$wind_on)
+dk1_2021$year <- as.numeric(dk1_2021$year)
+dk1_2021$month <- as.numeric(dk1_2021$month)
+dk1_2021$day <- as.numeric(dk1_2021$day)
+
+dk1_2022$solar <- as.numeric(dk1_2022$solar)
+dk1_2022$wind_off <- as.numeric(dk1_2022$wind_off)
+dk1_2022$wind_on <- as.numeric(dk1_2022$wind_on)
+dk1_2022$year <- as.numeric(dk1_2022$year)
+dk1_2022$month <- as.numeric(dk1_2022$month)
+dk1_2022$day <- as.numeric(dk1_2022$day)
+
+#merging to one dataset
+dk1_int <- rbind(dk1_2020, dk1_2021, dk1_2022)
+
+#create categorical variable
+dk1_int <- dk1_int %>% mutate(
+  intermit_DK = solar + wind_off + wind_on
+)
+
+colnames(dk1_int) <- c("solar_DK", "wind_off_DK", "wind_on_DK", "datetime", "year", "month", "day", "hour", "intermit_DK")
+
+#display data
+head(dk1_int, 10)
+
+```
+
+# Net export Norway NorNed (NN_data)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r NX_NN}
+
+#import csv
+NN_2020 <- read_csv("NX_NN/2020.csv")
+NN_2021 <- read_csv("NX_NN/2021.csv")
+NN_2022 <- read_csv("NX_NN/2022.csv")
+
+#changing colnames
+colnames(NN_2020) <- c("datetime", "imp_NE", "actual", "exp_NE", "actual_x")
+colnames(NN_2021) <- c("datetime", "imp_NE", "actual", "exp_NE", "actual_x")
+colnames(NN_2022) <- c("datetime", "imp_NE", "actual", "exp_NE", "actual_x")
+
+#creating date variables for grouping and averaging to hourly res
+NN_2020 = NN_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NN_2020["datetime"] <- dmy_hm(NN_2020$time_1)
+NN_2020["date"] <- date(NN_2020$datetime)
+NN_2020["hour"] <- hour(NN_2020$datetime)
+NN_2020 = NN_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NN_2020 <- NN_2020[-1]
+NN_2020 <- NN_2020[-1]
+
+NN_2021 = NN_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NN_2021["datetime"] <- dmy_hm(NN_2021$time_1)
+NN_2021["date"] <- date(NN_2021$datetime)
+NN_2021["hour"] <- hour(NN_2021$datetime)
+NN_2021 = NN_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NN_2021 <- NN_2021[-1]
+NN_2021 <- NN_2021[-1]
+
+NN_2022 = NN_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+NN_2022["datetime"] <- dmy_hm(NN_2022$time_1)
+NN_2022["date"] <- date(NN_2022$datetime)
+NN_2022["hour"] <- hour(NN_2022$datetime)
+NN_2022 = NN_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+NN_2022 <- NN_2022[-1]
+NN_2022 <- NN_2022[-1]
+
+#combining
+NN_data <- rbind(NN_2020, NN_2021, NN_2022)
+
+#fixing classes
+NN_data$year <- as.numeric(NN_data$year)
+NN_data$month <- as.numeric(NN_data$month)
+NN_data$day <- as.numeric(NN_data$day)
+
+NN_data <- NN_data %>% select(datetime, year, month, day, hour, imp_NE, exp_NE)
+
+#display data
+head(NN_data, 10)
+
+```
+
+# Net export Norway Skagerrak DK1 (SR_data)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r NX_SR}
+
+#import csv
+SR_2020 <- read_csv("NX_SR/2020.csv")
+SR_2021 <- read_csv("NX_SR/2021.csv")
+SR_2022 <- read_csv("NX_SR/2022.csv")
+
+#changing colnames
+colnames(SR_2020) <- c("datetime", "imp_DK", "actual", "exp_DK", "actual_x")
+colnames(SR_2021) <- c("datetime", "imp_DK", "actual", "exp_DK", "actual_x")
+colnames(SR_2022) <- c("datetime", "imp_DK", "actual", "exp_DK", "actual_x")
+
+#creating date variables for grouping and averaging to hourly res
+SR_2020 = SR_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+SR_2020["datetime"] <- dmy_hm(SR_2020$time_1)
+SR_2020["date"] <- date(SR_2020$datetime)
+SR_2020["hour"] <- hour(SR_2020$datetime)
+SR_2020 = SR_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+SR_2020 <- SR_2020[-1]
+SR_2020 <- SR_2020[-1]
+
+SR_2021 = SR_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+SR_2021["datetime"] <- dmy_hm(SR_2021$time_1)
+SR_2021["date"] <- date(SR_2021$datetime)
+SR_2021["hour"] <- hour(SR_2021$datetime)
+SR_2021 = SR_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+SR_2021 <- SR_2021[-1]
+SR_2021 <- SR_2021[-1]
+
+SR_2022 = SR_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+SR_2022["datetime"] <- dmy_hm(SR_2022$time_1)
+SR_2022["date"] <- date(SR_2022$datetime)
+SR_2022["hour"] <- hour(SR_2022$datetime)
+SR_2022 = SR_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+SR_2022 <- SR_2022[-1]
+SR_2022 <- SR_2022[-1]
+
+#combining
+SR_data <- rbind(SR_2020, SR_2021, SR_2022)
+
+#fixing classes
+SR_data$year <- as.numeric(SR_data$year)
+SR_data$month <- as.numeric(SR_data$month)
+SR_data$day <- as.numeric(SR_data$day)
+
+SR_data <- SR_data %>% select(datetime, year, month, day, hour, imp_DK, exp_DK)
+
+
+#display data
+head(SR_data, 10)
+
+```
+
+# Weather Europe (EU_temp)
+Source: open-meteo.com
+
+```{r weather eu}
+
+#Hamburg
+EUW_hamb = GET("https://archive-api.open-meteo.com/v1/archive?latitude=53.55&longitude=9.99&start_date=2020-01-01&end_date=2022-12-31&hourly=temperature_2m")
+EU_hamb <- fromJSON(rawToChar(EUW_hamb$content))
+EU_hamb <- as.data.frame(EU_hamb$hourly)
+EU_hamb$date <- ymd_hm(EU_hamb$time)
+
+#Berlin
+EUW_berl = GET("https://archive-api.open-meteo.com/v1/archive?latitude=52.52&longitude=13.41&start_date=2020-01-01&end_date=2022-12-31&hourly=temperature_2m")
+EU_berl = fromJSON(rawToChar(EUW_berl$content))
+EU_berl <- as.data.frame(EU_berl$hourly)
+EU_berl$date <- ymd_hm(EU_berl$time)
+
+#Dortmund
+EUW_dort = GET("https://archive-api.open-meteo.com/v1/archive?latitude=51.51&longitude=7.47&start_date=2020-01-01&end_date=2022-12-31&hourly=temperature_2m")
+EU_dort = fromJSON(rawToChar(EUW_dort$content))
+EU_dort <- as.data.frame(EU_dort$hourly)
+EU_dort$date <- ymd_hm(EU_dort$time)
+
+#Munchen
+EUW_mun = GET("https://archive-api.open-meteo.com/v1/archive?latitude=51.61&longitude=13.31&start_date=2020-01-01&end_date=2022-12-31&hourly=temperature_2m")
+EU_mun = fromJSON(rawToChar(EUW_mun$content))
+EU_mun <- as.data.frame(EU_mun$hourly)
+EU_mun$date <- ymd_hm(EU_mun$time)
+
+EU_temp <- cbind(EU_hamb, EU_berl, EU_dort, EU_mun)
+colnames(EU_temp) <- make.names(colnames(EU_temp), unique = TRUE)
+
+EU_temp <- EU_temp %>% group_by(date) %>% mutate(
+  temp_eu = mean(temperature_2m, `temperature_2m.1`, `temperature_2m.2`, `temperature_2m.3`)
+)
+
+EU_temp <- EU_temp %>% mutate(
+  year = year(date),
+  month = month(date),
+  day = day(date),
+  hour = hour(date)
+)
+
+EU_temp <- EU_temp %>% select(date, year, month, day, hour, temp_eu)
+
+```
+
+# El Certificates (el_cert)
+Source: Macrobond
+
+Resolution: daily
+
+```{r}
+el_cet <- read_csv2("elcet.csv")
+se_eu <- read_csv2("SEKEUR.csv")
+
+colnames(el_cet) <- c("date", "price_cert")
+
+el_cet <- el_cet %>% mutate(
+  date = dmy(date)
+) 
+
+colnames(se_eu) <- c("date", "EUR")
+
+se_eu <- se_eu %>% mutate(
+  date = dmy(date)
+) 
+
+el_cet <- el_cet %>% full_join(se_eu, index=date) %>% na.locf()
+
+el_cet <- el_cet %>% group_by(date) %>% mutate(
+  price_cert = price_cert/EUR
+)
+
+colnames(el_cet) <- c("datetime", "price_cert_reg", "EUR")
+el_cet <- el_cet %>% select(-EUR)
+
+el_cet$price_cert <- difference(el_cet$price_cert_reg, differences=1)
+
+```
+
+# Forecasted Demand Germany (dem_DE)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r demand DE}
+
+#importing CSV
+demde_2020 <- read_csv("demand_DE/2020.csv")
+demde_2021 <- read_csv("demand_DE/2021.csv")
+demde_2022 <- read_delim("demand_DE/2022.csv")
+
+#changing colnames
+colnames(demde_2020) <- c("date", "demand_DE", "actual")
+colnames(demde_2021) <- c("date", "demand_DE", "actual")
+colnames(demde_2022) <- c("date", "demand_DE", "actual")
+
+#creating date variables for grouping and averaging to hourly res
+demde_2020 = demde_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demde_2020["datetime"] <- dmy_hm(demde_2020$time_1)
+demde_2020["date"] <- date(demde_2020$datetime)
+demde_2020["hour"] <- hour(demde_2020$datetime)
+demde_2020 = demde_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demde_2020 <- demde_2020[-1]
+demde_2020 <- demde_2020[-1]
+
+demde_2021 = demde_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demde_2021["datetime"] <- dmy_hm(demde_2021$time_1)
+demde_2021["date"] <- date(demde_2021$datetime)
+demde_2021["hour"] <- hour(demde_2021$datetime)
+demde_2021 = demde_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demde_2021 <- demde_2021[-1]
+demde_2021 <- demde_2021[-1]
+
+demde_2022 = demde_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demde_2022["datetime"] <- dmy_hm(demde_2022$time_1)
+demde_2022["date"] <- date(demde_2022$datetime)
+demde_2022["hour"] <- hour(demde_2022$datetime)
+demde_2022 = demde_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demde_2022 <- demde_2022[-1]
+demde_2022 <- demde_2022[-1]
+
+#changing character classes to numeric
+demde_2020$demand_DE <- as.numeric(demde_2020$demand_DE)
+demde_2020$year <- as.numeric(demde_2020$year)
+demde_2020$month <- as.numeric(demde_2020$month)
+demde_2020$day <- as.numeric(demde_2020$day)
+
+demde_2021$demand_DE <- as.numeric(demde_2021$demand_DE)
+demde_2021$year <- as.numeric(demde_2021$year)
+demde_2021$month <- as.numeric(demde_2021$month)
+demde_2021$day <- as.numeric(demde_2021$day)
+
+demde_2022$demand_DE <- as.numeric(demde_2022$demand_DE)
+demde_2022$year <- as.numeric(demde_2022$year)
+demde_2022$month <- as.numeric(demde_2022$month)
+demde_2022$day <- as.numeric(demde_2022$day)
+
+#merging to one dataset
+dem_DE <- rbind(demde_2020, demde_2021, demde_2022)
+
+#calculate mean values for each hour
+dem_DE <- dem_DE %>% group_by(year, month, day, hour) %>% mutate(
+  demand_DE = mean(demand_DE),
+  actual = mean(actual)
+)
+
+#removes duplicate values which merges to hourly resolution
+dem_DE <- dem_DE %>% distinct(demand_DE, actual)
+
+#create a new datetime variable
+dem_DE <- dem_DE %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+dem_DE <- dem_DE %>% select(datetime, year, month, day, hour, demand_DE)
+
+#display data
+head(dem_DE, 10)
+
+```
+
+# Forecasted Demand Netherlands (dem_NE)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r demand NE}
+
+#importing CSV
+demne_2020 <- read_csv("demand_NE/2020.csv")
+demne_2021 <- read_csv("demand_NE/2021.csv")
+demne_2022 <- read_csv("demand_NE/2022.csv")
+
+#changing colnames
+colnames(demne_2020) <- c("date", "demand_NE", "actual")
+colnames(demne_2021) <- c("date", "demand_NE", "actual")
+colnames(demne_2022) <- c("date", "demand_NE", "actual")
+
+#creating date variables for grouping and averaging to hourly res
+demne_2020 = demne_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demne_2020["datetime"] <- dmy_hm(demne_2020$time_1)
+demne_2020["date"] <- date(demne_2020$datetime)
+demne_2020["hour"] <- hour(demne_2020$datetime)
+demne_2020 = demne_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demne_2020 <- demne_2020[-1]
+demne_2020 <- demne_2020[-1]
+
+demne_2021 = demne_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demne_2021["datetime"] <- dmy_hm(demne_2021$time_1)
+demne_2021["date"] <- date(demne_2021$datetime)
+demne_2021["hour"] <- hour(demne_2021$datetime)
+demne_2021 = demne_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demne_2021 <- demne_2021[-1]
+demne_2021 <- demne_2021[-1]
+
+demne_2022 = demne_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demne_2022["datetime"] <- dmy_hm(demne_2022$time_1)
+demne_2022["date"] <- date(demne_2022$datetime)
+demne_2022["hour"] <- hour(demne_2022$datetime)
+demne_2022 = demne_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demne_2022 <- demne_2022[-1]
+demne_2022 <- demne_2022[-1]
+
+#changing character classes to numeric
+demne_2020$demand_NE <- as.numeric(demne_2020$demand_NE)
+demne_2020$year <- as.numeric(demne_2020$year)
+demne_2020$month <- as.numeric(demne_2020$month)
+demne_2020$day <- as.numeric(demne_2020$day)
+
+demne_2021$demand_NE <- as.numeric(demne_2021$demand_NE)
+demne_2021$year <- as.numeric(demne_2021$year)
+demne_2021$month <- as.numeric(demne_2021$month)
+demne_2021$day <- as.numeric(demne_2021$day)
+
+demne_2022$demand_NE <- as.numeric(demne_2022$demand_NE)
+demne_2022$year <- as.numeric(demne_2022$year)
+demne_2022$month <- as.numeric(demne_2022$month)
+demne_2022$day <- as.numeric(demne_2022$day)
+
+#merging to one dataset
+dem_NE <- rbind(demne_2020, demne_2021, demne_2022)
+
+#calculate mean values for each hour
+dem_NE <- dem_NE %>% group_by(year, month, day, hour) %>% mutate(
+  demand_NE = mean(demand_NE),
+  actual = mean(actual)
+)
+
+#removes duplicate values which merges to hourly resolution
+dem_NE <- dem_NE %>% distinct(demand_NE, actual)
+
+#create a new datetime variable
+dem_NE <- dem_NE %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+dem_NE <- dem_NE %>% select(datetime, year, month, day, hour, demand_NE)
+
+#display data
+head(dem_NE, 10)
+
+```
+
+# Forecasted Demand England (dem_GB)
+Source: Elexon
+
+Resolution: hourly
+
+```{r}
+
+api_key <- "oodh1dpnqzas369"
+
+get_parameters("FORDAYDEM")
+#> [1] "from_datetime" "to_datetime"
+
+generation_data_1 <- full_request(data_item = "FORDAYDEM",
+                                api_key = api_key,
+                                from_date = "02-01-2021",
+                                to_date = "31-12-2021",
+                                parse = TRUE,
+                                clean_dates = TRUE,
+                                service_type = "csv")
+
+generation_data_2 <- full_request(data_item = "FORDAYDEM",
+                                api_key = api_key,
+                                from_date = "15-04-2021",
+                                to_date = "31-12-2022",
+                                parse = TRUE,
+                                clean_dates = TRUE,
+                                service_type = "csv")
+
+generation_data_3 <- full_request(data_item = "FORDAYDEM",
+                                api_key = api_key,
+                                from_date = "28-07-2021",
+                                to_date = "31-12-2022",
+                                parse = TRUE,
+                                clean_dates = TRUE,
+                                service_type = "csv")
+
+generation_data_4 <- full_request(data_item = "FORDAYDEM",
+                                api_key = api_key,
+                                from_date = "09-11-2021",
+                                to_date = "31-12-2022",
+                                parse = TRUE,
+                                clean_dates = TRUE,
+                                service_type = "csv")
+
+generation_data_5 <- full_request(data_item = "FORDAYDEM",
+                                api_key = api_key,
+                                from_date = "21-02-2022",
+                                to_date = "31-12-2022",
+                                parse = TRUE,
+                                clean_dates = TRUE,
+                                service_type = "csv")
+
+generation_data_6 <- full_request(data_item = "FORDAYDEM",
+                                api_key = api_key,
+                                from_date = "05-06-2022",
+                                to_date = "31-12-2022",
+                                parse = TRUE,
+                                clean_dates = TRUE,
+                                service_type = "csv")
+
+generation_data_7 <- full_request(data_item = "FORDAYDEM",
+                                api_key = api_key,
+                                from_date = "17-09-2022",
+                                to_date = "31-12-2022",
+                                parse = TRUE,
+                                clean_dates = TRUE,
+                                service_type = "csv")
+
+generation_data_1$settlement_date <- ymd(generation_data_1$settlement_date) 
+generation_data_2$settlement_date <- ymd(generation_data_2$settlement_date) 
+generation_data_3$settlement_date <- ymd(generation_data_3$settlement_date)
+generation_data_4$settlement_date <- ymd(generation_data_4$settlement_date)
+generation_data_5$settlement_date <- ymd(generation_data_5$settlement_date)
+generation_data_6$settlement_date <- ymd(generation_data_6$settlement_date)
+generation_data_7$settlement_date <- ymd(generation_data_7$settlement_date)
+
+dem_GB <- rbind(generation_data_1, generation_data_2, generation_data_3, generation_data_4, generation_data_5, generation_data_6, generation_data_7)
+
+dem_GB <- dem_GB %>% group_by(settlement_date, settlement_period) %>% mutate(
+  hour = settlement_period-1,
+  hour = hour/2,
+  hour = floor(hour)
+)
+
+dem_GB <- dem_GB %>% group_by(settlement_date, hour) %>% mutate(
+  demand_GB = mean(demand_spndemand_spngeneration)
+)
+
+dem_GB <- dem_GB %>% na.locf() %>% distinct(settlement_date, hour, demand_GB, .keep_all = TRUE)
+
+dem_GB <- dem_GB %>% select(settlement_date, hour, demand_GB)
+
+colnames(dem_GB) <- c("datetime", "hour", "demand_GB")
+
+dem_GB <- dem_GB %>% group_by(datetime, hour) %>% mutate(
+  datetime = make_datetime(year=year(datetime),month = month(datetime), day = day(datetime), hour = hour)
+)
+
+head(dem_GB, 10)
+
+```
+
+
+# Forecasted Demand Denmark DK1 (dem_DK)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r demand DK}
+
+#importing CSV
+demdk_2020 <- read_csv("demand_DK/2020.csv")
+demdk_2021 <- read_csv("demand_DK/2021.csv")
+demdk_2022 <- read_csv("demand_DK/2022.csv")
+
+#changing colnames
+colnames(demdk_2020) <- c("date", "demand_DK", "actual")
+colnames(demdk_2021) <- c("date", "demand_DK", "actual")
+colnames(demdk_2022) <- c("date", "demand_DK", "actual")
+
+#creating date variables for grouping and averaging to hourly res
+demdk_2020 = demdk_2020 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demdk_2020["datetime"] <- dmy_hm(demdk_2020$time_1)
+demdk_2020["date"] <- date(demdk_2020$datetime)
+demdk_2020["hour"] <- hour(demdk_2020$datetime)
+demdk_2020 = demdk_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demdk_2020 <- demdk_2020[-1]
+demdk_2020 <- demdk_2020[-1]
+
+demdk_2021 = demdk_2021 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demdk_2021["datetime"] <- dmy_hm(demdk_2021$time_1)
+demdk_2021["date"] <- date(demdk_2021$datetime)
+demdk_2021["hour"] <- hour(demdk_2021$datetime)
+demdk_2021 = demdk_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demdk_2021 <- demdk_2021[-1]
+demdk_2021 <- demdk_2021[-1]
+
+demdk_2022 = demdk_2022 %>% separate(date, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+demdk_2022["datetime"] <- dmy_hm(demdk_2022$time_1)
+demdk_2022["date"] <- date(demdk_2022$datetime)
+demdk_2022["hour"] <- hour(demdk_2022$datetime)
+demdk_2022 = demdk_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+demdk_2022 <- demdk_2022[-1]
+demdk_2022 <- demdk_2022[-1]
+
+#changing character classes to numeric
+demdk_2020$demand_DK <- as.numeric(demdk_2020$demand_DK)
+demdk_2020$year <- as.numeric(demdk_2020$year)
+demdk_2020$month <- as.numeric(demdk_2020$month)
+demdk_2020$day <- as.numeric(demdk_2020$day)
+
+demdk_2021$demand_DK <- as.numeric(demdk_2021$demand_DK)
+demdk_2021$year <- as.numeric(demdk_2021$year)
+demdk_2021$month <- as.numeric(demdk_2021$month)
+demdk_2021$day <- as.numeric(demdk_2021$day)
+
+demdk_2022$demand_DK <- as.numeric(demdk_2022$demand_DK)
+demdk_2022$year <- as.numeric(demdk_2022$year)
+demdk_2022$month <- as.numeric(demdk_2022$month)
+demdk_2022$day <- as.numeric(demdk_2022$day)
+
+#merging to one dataset
+dem_DK <- rbind(demdk_2020, demdk_2021, demdk_2022)
+
+#calculate mean values for each hour
+dem_DK <- dem_DK %>% group_by(year, month, day, hour) %>% mutate(
+  demand_DK = mean(demand_DK),
+  actual = mean(actual)
+)
+
+#removes duplicate values which merges to hourly resolution
+dem_DK <- dem_DK %>% distinct(demand_DK, actual)
+
+#create a new datetime variable
+dem_DK <- dem_DK %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+dem_DK <- dem_DK %>% select(datetime, year, month, day, hour, demand_DK)
+
+#display data
+head(dem_DK, 10)
+
+```
+
+
+# Generation by Production Type Netherlands (gen_NE)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r production NE}
+gen_NE_2020 <- read_csv("generation_NE/2020.csv")
+gen_NE_2021 <- read_csv("generation_NE/2021.csv")
+gen_NE_2022 <- read_csv("generation_NE/2022.csv")
+
+#changing colnames
+colnames(gen_NE_2020) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(gen_NE_2021) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(gen_NE_2022) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+gen_NE_2020 = gen_NE_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_NE_2020["datetime"] <- dmy_hm(gen_NE_2020$time_1)
+gen_NE_2020["date"] <- date(gen_NE_2020$datetime)
+gen_NE_2020["hour"] <- hour(gen_NE_2020$datetime)
+gen_NE_2020 = gen_NE_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_NE_2020 <- gen_NE_2020[-1]
+gen_NE_2020 <- gen_NE_2020[-1]
+
+gen_NE_2021 = gen_NE_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_NE_2021["datetime"] <- dmy_hm(gen_NE_2021$time_1)
+gen_NE_2021["date"] <- date(gen_NE_2021$datetime)
+gen_NE_2021["hour"] <- hour(gen_NE_2021$datetime)
+gen_NE_2021 = gen_NE_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_NE_2021 <- gen_NE_2021[-1]
+gen_NE_2021 <- gen_NE_2021[-1]
+
+gen_NE_2022 = gen_NE_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_NE_2022["datetime"] <- dmy_hm(gen_NE_2022$time_1)
+gen_NE_2022["date"] <- date(gen_NE_2022$datetime)
+gen_NE_2022["hour"] <- hour(gen_NE_2022$datetime)
+gen_NE_2022 = gen_NE_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_NE_2022 <- gen_NE_2022[-1]
+gen_NE_2022 <- gen_NE_2022[-1]
+
+#selecting variables
+gen_NE_2020 <- gen_NE_2020 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+gen_NE_2021 <- gen_NE_2021 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+gen_NE_2022 <- gen_NE_2022 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+#changing classes from character to numeric
+gen_NE_2020$year <- as.numeric(gen_NE_2020$year)
+gen_NE_2020$month <- as.numeric(gen_NE_2020$month)
+gen_NE_2020$day <- as.numeric(gen_NE_2020$day)
+gen_NE_2020$hour <- as.numeric(gen_NE_2020$hour)
+
+gen_NE_2021$year <- as.numeric(gen_NE_2021$year)
+gen_NE_2021$month <- as.numeric(gen_NE_2021$month)
+gen_NE_2021$day <- as.numeric(gen_NE_2021$day)
+gen_NE_2021$hour <- as.numeric(gen_NE_2021$hour)
+
+gen_NE_2022$year <- as.numeric(gen_NE_2022$year)
+gen_NE_2022$month <- as.numeric(gen_NE_2022$month)
+gen_NE_2022$day <- as.numeric(gen_NE_2022$day)
+gen_NE_2022$hour <- as.numeric(gen_NE_2022$hour)
+
+gen_NE <- rbind(gen_NE_2020, gen_NE_2021, gen_NE_2022)
+
+gen_NE$b_coal <- as.numeric(gen_NE$b_coal)
+gen_NE$oil <- as.numeric(gen_NE$oil)
+gen_NE$geo <- as.numeric(gen_NE$geo)
+gen_NE$hydro_pump <- as.numeric(gen_NE$hydro_pump)
+gen_NE$hydro_res <- as.numeric(gen_NE$hydro_res)
+gen_NE$other_renew <- as.numeric(gen_NE$other_renew)
+
+gen_NE <- gen_NE %>% group_by(year, month, day, hour) %>% mutate(
+  biomass = mean(biomass, na.rm=TRUE),
+  b_coal = mean(b_coal, na.rm=TRUE),
+  gas = mean(gas, na.rm=TRUE),
+  h_coal = mean(h_coal, na.rm=TRUE),
+  oil = mean(oil, na.rm=TRUE),
+  geo = mean(geo, na.rm=TRUE),
+  hydro_pump = mean(hydro_pump, na.rm=TRUE),
+  hydro_river = mean(hydro_river, na.rm=TRUE),
+  hydro_res = mean(hydro_res, na.rm=TRUE),
+  nuclear = mean(nuclear, na.rm=TRUE),
+  other = mean(other, na.rm=TRUE),
+  other_renew = mean(other_renew, na.rm=TRUE),
+  waste = mean(waste, na.rm=TRUE)
+)
+
+gen_NE <- gen_NE %>% distinct(biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste)
+
+#create a new datetime variable
+gen_NE <- gen_NE %>% mutate(
+  datetime = make_datetime(year, month, day, hour)
+)
+
+#categorize production types
+gen_NE <- gen_NE %>% mutate(
+  non_renew_NE = sum(b_coal, gas, h_coal, oil, other, na.rm = TRUE),
+  renew_NE = sum(biomass, hydro_pump, hydro_river, hydro_res, geo, waste, other_renew, nuclear, na.rm = TRUE)
+)
+
+gen_NE <- gen_NE %>% select(datetime, year, month, day, hour, non_renew_NE, renew_NE)
+
+#display data
+head(gen_NE, 10)
+```
+
+# Generation by Production Type Denmark (gen_DK)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r production DK}
+gen_DK_2020 <- read_csv("generation_DK/2020.csv")
+gen_DK_2021 <- read_csv("generation_DK/2021.csv")
+gen_DK_2022 <- read_csv("generation_DK/2022.csv")
+
+#changing colnames
+colnames(gen_DK_2020) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(gen_DK_2021) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+colnames(gen_DK_2022) <- c("area", "datetime", "biomass", "b_coal", "coal", "gas", "h_coal", "oil", "oil_shale", "peat", "geo", "hydro_pump", "hydro_pump_cons", "hydro_river", "hydro_res", "marine", "nuclear", "other", "other_renew", "solar", "waste", "wind_off", "wind_on")
+
+#creating date variables for grouping and averaging to hourly res
+gen_DK_2020 = gen_DK_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_DK_2020["datetime"] <- dmy_hm(gen_DK_2020$time_1)
+gen_DK_2020["date"] <- date(gen_DK_2020$datetime)
+gen_DK_2020["hour"] <- hour(gen_DK_2020$datetime)
+gen_DK_2020 = gen_DK_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_DK_2020 <- gen_DK_2020[-1]
+gen_DK_2020 <- gen_DK_2020[-1]
+
+gen_DK_2021 = gen_DK_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_DK_2021["datetime"] <- dmy_hm(gen_DK_2021$time_1)
+gen_DK_2021["date"] <- date(gen_DK_2021$datetime)
+gen_DK_2021["hour"] <- hour(gen_DK_2021$datetime)
+gen_DK_2021 = gen_DK_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_DK_2021 <- gen_DK_2021[-1]
+gen_DK_2021 <- gen_DK_2021[-1]
+
+gen_DK_2022 = gen_DK_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+gen_DK_2022["datetime"] <- dmy_hm(gen_DK_2022$time_1)
+gen_DK_2022["date"] <- date(gen_DK_2022$datetime)
+gen_DK_2022["hour"] <- hour(gen_DK_2022$datetime)
+gen_DK_2022 = gen_DK_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+gen_DK_2022 <- gen_DK_2022[-1]
+gen_DK_2022 <- gen_DK_2022[-1]
+
+#selecting variables
+gen_DK_2020 <- gen_DK_2020 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+gen_DK_2021 <- gen_DK_2021 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+gen_DK_2022 <- gen_DK_2022 %>% dplyr::select(datetime, biomass, b_coal, gas, h_coal, oil, geo, hydro_pump, hydro_river, hydro_res, nuclear, other, other_renew, waste, year, month, day, hour)
+
+#changing classes from character to numeric
+gen_DK_2020$year <- as.numeric(gen_DK_2020$year)
+gen_DK_2020$month <- as.numeric(gen_DK_2020$month)
+gen_DK_2020$day <- as.numeric(gen_DK_2020$day)
+gen_DK_2020$hour <- as.numeric(gen_DK_2020$hour)
+
+gen_DK_2021$year <- as.numeric(gen_DK_2021$year)
+gen_DK_2021$month <- as.numeric(gen_DK_2021$month)
+gen_DK_2021$day <- as.numeric(gen_DK_2021$day)
+gen_DK_2021$hour <- as.numeric(gen_DK_2021$hour)
+
+gen_DK_2022$year <- as.numeric(gen_DK_2022$year)
+gen_DK_2022$month <- as.numeric(gen_DK_2022$month)
+gen_DK_2022$day <- as.numeric(gen_DK_2022$day)
+gen_DK_2022$hour <- as.numeric(gen_DK_2022$hour)
+
+#combine
+gen_DK <- rbind(gen_DK_2020, gen_DK_2021, gen_DK_2022)
+
+gen_DK$b_coal <- as.numeric(gen_DK$b_coal)
+gen_DK$geo <- as.numeric(gen_DK$geo)
+gen_DK$hydro_pump <- as.numeric(gen_DK$hydro_pump)
+gen_DK$hydro_res <- as.numeric(gen_DK$hydro_res)
+gen_DK$nuclear <- as.numeric(gen_DK$nuclear)
+gen_DK$other <- as.numeric(gen_DK$other)
+gen_DK$hydro_river <- as.numeric(gen_DK$hydro_river)
+
+
+#categorize production types
+gen_DK <- gen_DK %>% group_by(datetime) %>% mutate(
+  non_renew_DK = sum(b_coal, gas, h_coal, oil, other, na.rm = TRUE),
+  renew_DK = sum(biomass, hydro_pump, hydro_river, hydro_res, geo, waste, other_renew, nuclear, na.rm = TRUE)
+)
+
+gen_DK <- gen_DK %>% select(datetime, year, month, day, hour, non_renew_DK, renew_DK)
+
+#display data
+head(gen_DK, 10)
+
+```
+
+# Day Ahead Price in Netherlands (price_NE)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r price NE}
+
+#import csv
+pne_2020 <- read_csv("day_ahead_price_NE/2020.csv")
+pne_2021 <- read_csv("day_ahead_price_NE/2021.csv")
+pne_2022 <- read_csv("day_ahead_price_NE/2022.csv")
+
+#changing colnames
+colnames(pne_2020) <- c("datetime", "price", "currency", "area")
+colnames(pne_2021) <- c("datetime", "price", "currency", "area")
+colnames(pne_2022) <- c("datetime", "price", "currency", "area")
+
+#creating date variables for grouping and averaging to hourly res
+pne_2020 = pne_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+pne_2020["datetime"] <- dmy_hm(pne_2020$time_1)
+pne_2020["date"] <- date(pne_2020$datetime)
+pne_2020["hour"] <- hour(pne_2020$datetime)
+pne_2020 = pne_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+pne_2020 <- pne_2020[-1]
+pne_2020 <- pne_2020[-1]
+
+pne_2021 = pne_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+pne_2021["datetime"] <- dmy_hm(pne_2021$time_1)
+pne_2021["date"] <- date(pne_2021$datetime)
+pne_2021["hour"] <- hour(pne_2021$datetime)
+pne_2021 = pne_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+pne_2021 <- pne_2021[-1]
+pne_2021 <- pne_2021[-1]
+
+pne_2022 = pne_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+pne_2022["datetime"] <- dmy_hm(pne_2022$time_1)
+pne_2022["date"] <- date(pne_2022$datetime)
+pne_2022["hour"] <- hour(pne_2022$datetime)
+pne_2022 = pne_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+pne_2022 <- pne_2022[-1]
+pne_2022 <- pne_2022[-1]
+
+#combining all years
+price_NE <- rbind(pne_2020, pne_2021, pne_2022)
+
+#selecting variables
+price_NE <- price_NE %>% dplyr::select(price, datetime, year, month, day, hour)
+
+#fixing classes from character
+price_NE$year <- as.numeric(price_NE$year)
+price_NE$month <- as.numeric(price_NE$month)
+price_NE$day <- as.numeric(price_NE$day)
+
+colnames(price_NE) <- c("price_NE", "datetime", "year", "month", "day", "hour")
+
+#display data
+head(price_NE, 10)
+
+
+```
+
+
+# Day Ahead Price in United Kingdom (price_GB)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r price_GB}
+
+#import csv
+pgb_2020 <- read_csv2("day_ahead_price_GB/2020.csv")
+pgb_2021 <- read_csv2("day_ahead_price_GB/2021.csv")
+pgb_2022 <- read_csv2("day_ahead_price_GB/2022.csv")
+GBPEUR <- read_csv("GBPEUR.csv")
+
+pgb_2020$Datetime <- dmy(pgb_2020$Datetime)
+pgb_2020 <- pivot_longer(pgb_2020, cols = `0`:`23`, names_to = "hour", values_to = "price_GB")
+pgb_2020$hour <- as.numeric(pgb_2020$hour)
+pgb_2020 <- pgb_2020 %>% mutate(
+  datetime = make_datetime(year = year(Datetime), month = month(Datetime), day = day(Datetime), hour = hour)
+) %>% select(-Datetime)
+
+pgb_2021$Datetime <- dmy(pgb_2021$Datetime)
+pgb_2021 <- pivot_longer(pgb_2021, cols = `0`:`23`, names_to = "hour", values_to = "price_GB")
+pgb_2021$hour <- as.numeric(pgb_2021$hour)
+pgb_2021 <- pgb_2021 %>% mutate(
+  datetime = make_datetime(year = year(Datetime), month = month(Datetime), day = day(Datetime), hour = hour)
+) %>% select(-Datetime)
+
+pgb_2022$Datetime <- dmy(pgb_2022$Datetime)
+pgb_2022 <- pivot_longer(pgb_2022, cols = `0`:`23`, names_to = "hour", values_to = "price_GB")
+pgb_2022$hour <- as.numeric(pgb_2022$hour)
+pgb_2022 <- pgb_2022 %>% mutate(
+  datetime = make_datetime(year = year(Datetime), month = month(Datetime), day = day(Datetime), hour = hour)
+) %>% select(-Datetime)
+
+GBPEUR <- GBPEUR %>% select(Date, Open)
+GBPEUR$Date <- ymd(GBPEUR$Date)
+colnames(GBPEUR) <- c("datetime", "GBPEUR")
+
+#combining all years
+price_GB <- rbind(pgb_2020, pgb_2021, pgb_2022)
+
+price_GB <- price_GB %>% left_join(GBPEUR) %>% na.locf()
+
+price_GB <- price_GB %>% mutate(
+  price_GB_1 = price_GB*GBPEUR
+)
+
+price_GB <- price_GB %>% select(datetime, hour, price_GB_1)
+
+colnames(price_GB) <- c("datetime", "hour", "price_GB")
+
+price_GB <- price_GB %>% filter(year(datetime) <= 2022 & year(datetime) >= 2020)
+
+#display data
+head(price_GB, 10)
+
+```
+
+# Day Ahead Price in Denmark (price_DK)
+Source: ENTSO-E
+
+Resolution: hourly
+
+```{r price_GB}
+
+#import csv
+pdk_2020 <- read_csv("day_ahead_price_DK1/2020.csv")
+pdk_2021 <- read_csv("day_ahead_price_DK1/2021.csv")
+pdk_2022 <- read_csv("day_ahead_price_DK1/2022.csv")
+
+#changing colnames
+colnames(pdk_2020) <- c("datetime", "price", "currency", "area")
+colnames(pdk_2021) <- c("datetime", "price", "currency", "area")
+colnames(pdk_2022) <- c("datetime", "price", "currency", "area")
+
+#creating date variables for grouping and averaging to hourly res
+pdk_2020 = pdk_2020 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+pdk_2020["datetime"] <- dmy_hm(pdk_2020$time_1)
+pdk_2020["date"] <- date(pdk_2020$datetime)
+pdk_2020["hour"] <- hour(pdk_2020$datetime)
+pdk_2020 = pdk_2020 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+pdk_2020 <- pdk_2020[-1]
+pdk_2020 <- pdk_2020[-1]
+
+pdk_2021 = pdk_2021 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+pdk_2021["datetime"] <- dmy_hm(pdk_2021$time_1)
+pdk_2021["date"] <- date(pdk_2021$datetime)
+pdk_2021["hour"] <- hour(pdk_2021$datetime)
+pdk_2021 = pdk_2021 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+pdk_2021 <- pdk_2021[-1]
+pdk_2021 <- pdk_2021[-1]
+
+pdk_2022 = pdk_2022 %>% separate(datetime, into=c("time_1", "time_2"), sep="-", remove=TRUE)
+pdk_2022["datetime"] <- dmy_hm(pdk_2022$time_1)
+pdk_2022["date"] <- date(pdk_2022$datetime)
+pdk_2022["hour"] <- hour(pdk_2022$datetime)
+pdk_2022 = pdk_2022 %>% separate(date, into=c("year", "month", "day"), sep="-", remove=TRUE)
+pdk_2022 <- pdk_2022[-1]
+pdk_2022 <- pdk_2022[-1]
+
+#combining all years
+price_DK <- rbind(pdk_2020, pdk_2021, pdk_2022)
+
+#selecting variables
+price_DK <- price_DK %>% dplyr::select(price, datetime, year, month, day, hour)
+
+#fixing classes from character
+price_DK$year <- as.numeric(price_DK$year)
+price_DK$month <- as.numeric(price_DK$month)
+price_DK$day <- as.numeric(price_DK$day)
+
+colnames(price_DK) <- c("price_DK", "datetime", "year", "month", "day", "hour")
+
+#display data
+head(price_DK, 10)
+
+
+
+```
+
+# Combining all sets
+
+```{r combine}
+#hourly datasets
+hourly_1 <- cons_NO2 %>% full_join(for_int)
+hourly_2 <- hourly_1 %>% full_join(gen_prod)
+hourly_3 <- hourly_2 %>% full_join(price_NO2)
+hourly_4 <- hourly_3 %>% full_join(NSL_data)
+hourly_5 <- hourly_4 %>% full_join(prod_NO)
+hourly_6 <- hourly_5 %>% full_join(NX_data)
+hourly_7 <- hourly_6 %>% full_join(price_DE)
+hourly_8 <- hourly_7 %>% full_join(for_GB)
+hourly_9 <- hourly_8 %>% full_join(neth_int)
+hourly_10 <- hourly_9 %>% full_join(dk1_int)
+hourly_11 <- hourly_10 %>% full_join(NN_data)
+hourly_12 <- hourly_11 %>% full_join(SR_data)
+hourly_13 <- hourly_12 %>% full_join(EU_temp)
+hourly_14 <- hourly_13 %>% full_join(mag_data)
+hourly_15 <- hourly_14 %>% full_join(dem_DE)
+hourly_16 <- hourly_15 %>% full_join(dem_NE)
+hourly_17 <- hourly_16 %>% full_join(dem_GB)
+hourly_18 <- hourly_17 %>% full_join(dem_DK)
+hourly_19 <- hourly_18 %>% full_join(gen_NE)
+hourly_20 <- hourly_19 %>% full_join(gen_DK)
+hourly_21 <- hourly_20 %>% full_join(price_NE)
+hourly_22 <- hourly_21 %>% full_join(price_DK)
+hourly_23 <- hourly_22 %>% full_join(price_GB)
+hourly_24 <- hourly_23 %>% full_join(PV_GB)
+hourly <- hourly_24 %>% full_join(for_NO)
+
+
+#daily datasets 
+daily_1 <- hlf_data %>% full_join(NG_data) %>% na.locf()
+daily_2 <- daily_1 %>% full_join(el_cet) %>% na.locf()
+daily <- daily_2 %>% full_join(crude_data, index=datetime) %>% na.locf()
+
+#combine hourly and daily
+NL <- hourly %>% full_join(daily) %>% na.locf() %>% distinct()
+
+```
+
+# Preparation, dummys and transformations
+
+```{r dummy}
+
+NL <- NL %>% filter(datetime>="2021-10-01 00:00:00")
+
+NL <- NL %>% mutate(
+  price_l1 = lag(price_NO2, 1),
+  price_l2 = lag(price_NO2, 24),
+  price_l3 = lag(price_NO2, 24*7)
+)
+
+NL <- NL %>% mutate(
+  price_NG = shift(price_NG, n=24, type="lead"),
+  price_cert = shift(price_cert, n=24, type="lead"),
+  price_crude = shift(price_crude, n=24, type="lead"),
+  temp = shift(temp, n=24, type = "lead"),
+  NO2_diff = difference(NO2, differences = 1),
+  NO2_diff = shift(NO2_diff, n=24, type = "lead")
+)
+
+NL <- NL %>% mutate(
+  intermit_GB = shift(intermit_GB, n=24, type="lead"),
+  non_renew_DE = shift(non_renew_DE, n=24, type="lead"),
+  non_renew_GB = shift(non_renew_GB, n=24, type="lead"),
+  non_renew_DK = shift(non_renew_DK, n=24, type="lead"),
+  non_renew_NE = shift(non_renew_NE, n=24, type="lead"),
+  renew_DE = shift(renew_DE, n=24, type="lead"),
+  renew_GB = shift(renew_GB, n=24, type="lead"),
+  renew_DK = shift(renew_DK, n=24, type="lead"),
+  renew_NE = shift(renew_NE, n=24, type="lead"),
+  PV_GB = shift(PV_GB, n=24, type="lead")
+)
+
+NL <- NL %>% group_by(datetime) %>% mutate(
+  wday = lubridate::wday(datetime, week_start = 1),
+  weekend = ifelse(wday>=6, 1,0),
+  intermit_GB = wind_GB + PV_GB,
+  int_DE = intermit_DE-demand_DE,
+  int_GB = intermit_GB-demand_GB,
+  int_NE = intermit_NE-demand_NE,
+  int_DK = intermit_DK-demand_DK,
+  fossil = non_renew_DE + non_renew_GB + non_renew_DK + non_renew_NE,
+  renew = renew_DE + renew_GB + renew_DK + renew_NE,
+  resid = renew_NO-hydro_res-demand,
+  wind_DE = wind_on_DE + wind_off_DE,
+  wind_GB = wind_GB,
+  wind_DK = wind_on_DK + wind_off_DK,
+  wind_NE = wind_on_NE + wind_off_NE,
+  VRE_DE = (intermit_DE/sum(intermit_DE, non_renew_DE, renew_DE))*100,
+  VRE_GB = (intermit_GB/sum(intermit_GB, non_renew_GB, renew_GB))*100,
+  VRE_DK = (intermit_DK/sum(intermit_DK, non_renew_DK, renew_DK))*100,
+  VRE_NE = (intermit_NE/sum(intermit_NE, non_renew_NE, renew_NE))*100
+)
+
+NL["trend_time"] <- seq_len(nrow(NL))
+
+# create a vector of Norwegian holiday dates
+holiday_dates <- as.Date(c("2021-12-24", "2022-04-14", "2022-04-15", "2022-04-18", "2022-05-17", "2022-05-26", "2022-06-06", "2022-12-26"))
+
+# create a new variable indicating whether each date is a holiday
+NL <- NL %>%
+  mutate(is_holiday = if_else(as.Date(datetime) %in% holiday_dates, 1, 0))
+
+NL <- NL %>% distinct(datetime, .keep_all = TRUE)
+
+#export to an xlsx
+write_xlsx(NL, "Data_VASKET.xlsx")
+
+```
+
+### .
+### .
+### .
+### .
+
+## Empirical Analysis
+
+# Electricity mix
+
+```{r}
+energy_mix <- read_csv("electricity-prod-source-stacked.csv")
+
+energy_mix <- energy_mix %>% filter(Entity=="Germany" | Entity=="Netherlands" | Entity=="United Kingdom" | Entity=="Denmark" | Entity=="Norway")
+
+colnames(energy_mix) <- c("Country", "Code", "Year", "Other Renewables", "Bioenergy", "Solar", "Wind", "Hydro", "Nuclear", "Oil", "Gas", "Coal")
+
+energy_mix <- energy_mix %>% mutate_all(~replace(., is.na(.), 0))
+
+energy_mix <- energy_mix %>% group_by(Country, Year) %>% pivot_longer(names_to = "variable", values_to = "value", cols = `Other Renewables`:Coal) 
+
+brewer_pal <- c("#081d58", "#253494", "#225ea8", "#1d91c0", "#41b6c4", "#7fcdbb", "#c7e9b4", "#edf8b1", "#e8e8a9")
+
+energy_mix %>% filter(Country=="Norway" & Year >= 1990) %>% ggplot(aes(x=Year, y=value, fill = variable)) + geom_area() + scale_fill_manual(values = brewer_pal) +
+  labs(x = "Year", y = "TWh", fill="Source", title="Electricity Mix Norway") + theme_nice()
+
+energy_mix %>% filter(Country=="Denmark" & Year >= 1990) %>% ggplot(aes(x=Year, y=value, fill = variable)) + geom_area() + scale_fill_manual(values = brewer_pal) +
+  labs(x = "Year", y = "TWh", fill="Source", title="Electricity Mix Denmark") + theme_nice()
+
+energy_mix %>% filter(Country=="Germany" & Year >= 1990) %>% ggplot(aes(x=Year, y=value, fill = variable)) + geom_area() + scale_fill_manual(values = brewer_pal) +
+  labs(x = "Year", y = "TWh", fill="Source", title="Electricity Mix Germany") + theme_nice()
+
+energy_mix %>% filter(Country=="Netherlands" & Year >= 1990) %>% ggplot(aes(x=Year, y=value, fill = variable)) + geom_area() + scale_fill_manual(values = brewer_pal) +
+  labs(x = "Year", y = "TWh", fill="Source", title="Electricity Mix Netherlands") + theme_nice()
+
+energy_mix %>% filter(Country=="United Kingdom" & Year >= 1990) %>% ggplot(aes(x=Year, y=value, fill = variable)) + geom_area() + scale_fill_manual(values = brewer_pal) +
+  labs(x = "Year", y = "TWh", fill="Source", title="Electricity Mix United Kingdom") + theme_nice()
+
+```
+
+# Descriptives
+
+```{r}
+library(RColorBrewer)
+#brewer_pal <- brewer.pal(4, "YlGnBu")
+brewer_pal <- c("#081d58", "#253494", "#225ea8", "#1d91c0", "#41b6c4", "#7fcdbb", "#c7e9b4", "#edf8b1", "#ffffd9")
+
+##
+brewer_pal_p1 <- c("#081d58")
+
+NL %>% ggplot(aes(x = datetime, y = price_NO2, color=price_NO2)) +
+  geom_line(color=brewer_pal_p1) +
+  labs(x = "Date", y = "EUR/MWh", title="Price NO2") +
+  theme_nice() + 
+  scale_x_datetime(date_breaks = "1 month") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+
+
+##
+bar_plot_1 <- NL %>% select(datetime, hour, int_DE, int_GB, int_DK, int_NE) %>% group_by(datetime) %>% mutate(
+  Germany = ifelse(int_DE > 0, 1, 0),
+  England = ifelse(int_GB > 0, 1, 0),
+  Denmark = ifelse(int_DK > 0, 1, 0),
+  Netherland = ifelse(int_NE > 0, 1, 0)
+) %>% na.omit() %>% pivot_longer(cols = Germany:Netherland, names_to = "var", values_to = "value") %>% select(hour, var, value) %>% filter(!hour==24)
+
+brewer_pal_p2 <- c("#253494", "#225ea8", "#1d91c0", "#41b6c4")
+
+bar_plot_1 %>% ggplot(aes(x = hour, y = value, fill = var)) + 
+  geom_col() + scale_fill_manual(values = brewer_pal_p2) + theme_nice()  +
+  labs(x = "Hour", y = "Number of Hours", fill="Country", title="Hours With Residual VRE") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1))
+##
+
+descriptives_1 <- NL %>% select(price_NO2, demand, NO2_diff, price_NG, price_cert, precip, weekend, is_holiday, trend_time, month, price_l2, VRE_DE, VRE_GB, VRE_NE, VRE_DK)
+
+df_describe_1 <- describe(descriptives_1)
+df_describe_1["variable"] <- rownames(df_describe_1)
+
+write_xlsx(df_describe_1, "descriptive.xlsx")
+
+##
+#negative prices
+
+negative_prices <- NL %>% filter(price_NO2<0) %>% group_by(datetime) %>% summarise(price_NO2)
+
+## Table with mean prices
+
+mean_res_DE_pos <- NL  %>% select(datetime, hour, price_NO2, int_DE) %>% filter(int_DE >= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+mean_res_DE_neg <- NL  %>% select(datetime, hour, price_NO2, int_DE) %>% filter(int_DE <= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+mean_res_GB_pos <- NL  %>% select(datetime, hour, price_NO2, int_GB) %>% filter(int_GB >= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+mean_res_GB_neg <- NL  %>% select(datetime, hour, price_NO2, int_GB) %>% filter(int_GB <= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+mean_res_DK_pos <- NL  %>% select(datetime, hour, price_NO2, int_DK) %>% filter(int_DK >= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+mean_res_DK_neg <- NL  %>% select(datetime, hour, price_NO2, int_DK) %>% filter(int_DK <= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+mean_res_NE_pos <- NL  %>% select(datetime, hour, price_NO2, int_NE) %>% filter(int_NE >= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+mean_res_NE_neg <- NL  %>% select(datetime, hour, price_NO2, int_NE) %>% filter(int_NE <= 0) %>% group_by(NULL) %>% summarise(mean(price_NO2, na.rm = TRUE))
+
+
+##
+
+bar_plot_3 <-  NL %>% group_by(hour) %>% summarise(mean(price_NO2)) %>% filter(!hour==24)
+
+bar_plot_3 %>% ggplot(aes(x = hour, y = `mean(price_NO2)`, fill = `mean(price_NO2)`)) + 
+  geom_col() + scale_fill_continuous(low=c("#253494"), high=c("#1d91c0")) + theme_nice()  +
+  labs(x = "Hour", y = "EUR/MWh", fill="EUR/MWh", title="Mean Price Levels") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1))
+
+##
+
+bar_plot_4 <- NL %>% select(datetime, month, int_DE, int_GB, int_DK, int_NE) %>% na.omit() %>% pivot_longer(cols = int_DE:int_NE, names_to = "var", values_to = "value") %>% select(month, var, value)
+
+bar_plot_4 %>% ggplot(aes(x = month, y = value, fill = var)) + 
+  geom_col(position = "identity") + scale_fill_manual(values = brewer_pal_p2) + theme_nice()  +
+  labs(x = "Month", y = "Number of Surplus Intermittent", fill="Country", title="Months Surplus Intermittent") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1))
+
+
+## 
+
+corplot_1 <- NL %>% select(datetime, price_NO2, demand, precip, NO2, price_NG, price_cert_reg, VRE_DE, VRE_GB, VRE_DK, VRE_NE, is_holiday, weekend, price_l2, trend_time)
+
+corplot_1$datetime <- as.numeric(corplot_1$datetime)
+
+corplot_1 <- corplot_1 %>% mutate(
+  Price_NO2 = price_NO2,
+  Demand = demand,
+  Precipitation = precip,
+  Reservoir = NO2,
+  Gas_Price= price_NG,
+  El_Certificate = price_cert_reg,
+  Holiday = is_holiday,
+  Weekend = weekend,
+  Price_lag = price_l2,
+  Trend = trend_time
+) %>% group_by(trend_time) %>%  select(-datetime, -price_NO2, -demand, -precip, -NO2, -price_NG, -price_cert_reg, -is_holiday, -weekend, -price_l2, -trend_time)
+
+corplot_1 %>% group_by(NULL) %>% select(-trend_time) %>% cor(use = "pairwise.complete.obs") %>% ggcorrplot(lab=TRUE, lab_size = 3, colors = c("#225ea8", "white", "#41b6c4"), legend.title="Correlation") + labs(title="Pearson Correlation", x="", y="") + theme_nice() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+##
+
+bar_plot_5 <- NL %>% select(datetime, hour, fos_DE, fos_GB, fos_DK, fos_NE) %>% group_by(datetime) %>% mutate(
+  Germany = ifelse(fos_DE > 0, 1, 0),
+  England = ifelse(fos_GB > 0, 1, 0),
+  Denmark = ifelse(fos_DK > 0, 1, 0),
+  Netherland = ifelse(fos_NE > 0, 1, 0)
+) %>% na.omit() %>% pivot_longer(cols = Germany:Netherland, names_to = "var", values_to = "value") %>% select(hour, var, value) %>% filter(!hour==24)
+
+bar_plot_5 %>% ggplot(aes(x = hour, y = value, fill = var)) + 
+  geom_col() + scale_fill_manual(values = brewer_pal_p2) + theme_nice()  +
+  labs(x = "Hour", y = "Number of Hours", fill="Country", title="Hours With Residual Fossil") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1))
+##
+
+##
+
+bar_plot_6 <- NL %>% select(datetime, hour, ren_DE, ren_GB, ren_DK, ren_NE) %>% group_by(datetime) %>% mutate(
+  Germany = ifelse(ren_DE > 0, 1, 0),
+  England = ifelse(ren_GB > 0, 1, 0),
+  Denmark = ifelse(ren_DK > 0, 1, 0),
+  Netherland = ifelse(ren_NE > 0, 1, 0)
+) %>% na.omit() %>% pivot_longer(cols = Germany:Netherland, names_to = "var", values_to = "value") %>% select(hour, var, value) %>% filter(!hour==24)
+
+bar_plot_6 %>% ggplot(aes(x = hour, y = value, fill = var)) + 
+  geom_col() + scale_fill_manual(values = brewer_pal_p2) + theme_nice()  +
+  labs(x = "Hour", y = "Number of Hours", fill="Country", title="Hours with Residual Renewables") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1))
+
+##
+
+bar_plot_7 <- NL %>% select(demand, datetime, hour) %>% group_by(hour) %>% summarise(mean(demand))
+
+bar_plot_7 %>% ggplot(aes(x = hour, y = `mean(demand)`, fill = `mean(demand)`)) + 
+  geom_col() + scale_fill_continuous(low=c("#253494")) + theme_nice()  +
+  labs(x = "Hour", y = "MWh", fill="MWh", title="Mean Demand NO2") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1))
+
+##
+
+NL %>% ggplot() +
+  geom_line(aes(x = datetime, y = NO2/1000, color=NO2), color=brewer_pal_p1) +
+  labs(x = "Date", y = "GWh", title="Reservoir Levels NO2") +
+  theme_nice() + 
+  scale_x_datetime(date_breaks = "1 month") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+
+##
+
+prod_table_DE <- NL %>% select(intermit_DE, non_renew_DE, renew_DE, hour) %>% mutate(
+  int_share_DE = intermit_DE/sum(intermit_DE, non_renew_DE, renew_DE),
+  fos_share_DE = non_renew_DE/sum(intermit_DE, non_renew_DE, renew_DE),
+  ren_share_DE = renew_DE/sum(intermit_DE, non_renew_DE, renew_DE)
+) %>% group_by(NULL) %>% mutate(
+  int_share_DE = mean(int_share_DE, na.rm=TRUE),
+  fos_share_DE = mean(fos_share_DE, na.rm=TRUE),
+  ren_share_DE = mean(ren_share_DE, na.rm=TRUE)
+) %>% distinct(int_share_DE, fos_share_DE, ren_share_DE)
+
+prod_table_GB <- NL %>% select(intermit_GB, non_renew_GB, renew_GB, hour) %>% mutate(
+  int_share_GB = intermit_GB/sum(intermit_GB, non_renew_GB, renew_GB),
+  fos_share_GB = non_renew_GB/sum(intermit_GB, non_renew_GB, renew_GB),
+  ren_share_GB = renew_GB/sum(intermit_GB, non_renew_GB, renew_GB)
+) %>% group_by(NULL) %>% mutate(
+  int_share_GB = mean(int_share_GB, na.rm=TRUE),
+  fos_share_GB = mean(fos_share_GB, na.rm=TRUE),
+  ren_share_GB = mean(ren_share_GB, na.rm=TRUE)
+) %>% distinct(int_share_GB, fos_share_GB, ren_share_GB)
+
+prod_table_DK <- NL %>% select(intermit_DK, non_renew_DK, renew_DK, hour) %>% mutate(
+  int_share_DK = intermit_DK/sum(intermit_DK, non_renew_DK, renew_DK),
+  fos_share_DK = non_renew_DK/sum(intermit_DK, non_renew_DK, renew_DK),
+  ren_share_DK = renew_DK/sum(intermit_DK, non_renew_DK, renew_DK)
+) %>% group_by(NULL) %>% mutate(
+  int_share_DK = mean(int_share_DK, na.rm=TRUE),
+  fos_share_DK = mean(fos_share_DK, na.rm=TRUE),
+  ren_share_DK = mean(ren_share_DK, na.rm=TRUE)
+) %>% distinct(int_share_DK, fos_share_DK, ren_share_DK)
+
+prod_table_NE <- NL %>% select(intermit_NE, non_renew_NE, renew_NE, hour) %>% mutate(
+  int_share_NE = intermit_NE/sum(intermit_NE, non_renew_NE, renew_NE),
+  fos_share_NE = non_renew_NE/sum(intermit_NE, non_renew_NE, renew_NE),
+  ren_share_NE = renew_NE/sum(intermit_NE, non_renew_NE, renew_NE)
+) %>% group_by(NULL) %>% mutate(
+  int_share_NE = mean(int_share_NE, na.rm=TRUE),
+  fos_share_NE = mean(fos_share_NE, na.rm=TRUE),
+  ren_share_NE = mean(ren_share_NE, na.rm=TRUE)
+) %>% distinct(int_share_NE, fos_share_NE, ren_share_NE)
+
+##
+
+NL %>% ggplot(aes(x = hour, y = price_NO2, fill=price_NO2)) + 
+  geom_boxplot(aes(group=hour, fill="price_NO2"), show.legend = FALSE) + scale_fill_manual(values = "#1d91c0") + theme_nice()  +
+  labs(x = "Hour", y = "EUR/MWh", fill="EUR/MWh", title="Day Ahead Prices in NO2") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1))
+
+##
+
+bar_plot_8 <- NL %>% select(datetime, hour, int_DE, int_GB, int_DK, int_NE) %>% group_by(hour) %>% mutate(
+  Germany = mean(int_DE, na.rm=TRUE),
+  England  = mean(int_GB, na.rm=TRUE),
+  Denmark = mean(int_DK, na.rm=TRUE),
+  Netherlands = mean(int_NE, na.rm=TRUE)
+) %>% distinct(Denmark, .keep_all = TRUE) %>% pivot_longer(cols = Germany:Netherlands, names_to = "var", values_to = "value") %>% select(hour, var, value) %>% filter(!hour==24)
+
+bar_plot_8 %>% filter(var=="Germany" | var=="England" | var=="Denmark" | var=="Netherlands") %>%
+  ggplot(aes(x = hour, y = value, fill = var, group = var)) +
+  geom_col(aes(group = var)) +
+  facet_wrap(~ var, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "MWh", title = "Hourly Mean Residual VRE", fill="Country") +
+  scale_fill_manual(values = brewer_pal_p2) +
+  theme_nice() +
+    theme(strip.text = element_blank())
+
+##
+
+bar_plot_9 <- NL %>% select(datetime, hour, price_NO2, int_DE, int_GB, int_DK, int_NE) %>% group_by(hour) %>% mutate(
+  Germany_neg = ifelse(mean(int_DE, na.rm=TRUE)<=0, mean(price_NO2), 0),
+  Germany_pos = ifelse(mean(int_DE, na.rm=TRUE)>=0, mean(price_NO2), 0),
+  England_neg = ifelse(mean(int_GB, na.rm=TRUE)<=0, mean(price_NO2), 0),
+  England_pos = ifelse(mean(int_GB, na.rm=TRUE)>=0, mean(price_NO2), 0),
+  Denmark_neg = ifelse(mean(int_DK, na.rm=TRUE)<=0, mean(price_NO2), 0),
+  Denmark_pos = ifelse(mean(int_DK, na.rm=TRUE)>=0, mean(price_NO2), 0),
+  Netherland_neg = ifelse(mean(int_NE, na.rm=TRUE)<=0, mean(price_NO2), mean(price_NO2)),
+  Netherland_pos = ifelse(mean(int_NE, na.rm=TRUE)>=0, mean(price_NO2), 0)
+) %>% distinct(Denmark_neg, .keep_all = TRUE) %>% pivot_longer(cols = Germany_neg:Netherland_pos, names_to = "var", values_to = "value") %>% select(hour, var, value) %>% filter(!hour==24)
+
+bar_plot_9 %>% filter(var=="Netherland_neg") %>%
+  ggplot(aes(x = hour, y = value, fill = var, group = var)) +
+  geom_col(aes(group = var)) +
+  facet_wrap(~ var, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "MWh", title = "Hourly Mean Residual VRE", fill="Country") +
+  scale_fill_manual(values = brewer_pal_p2) +
+  theme_nice() +
+    theme(strip.text = element_blank())
+
+##
+
+VRE_price_DE <- NL %>%
+  select(datetime, price_NO2, VRE_DE) %>%
+  mutate(VRE_range = case_when(
+    VRE_DE >= 0 & VRE_DE <= 10 ~ "10",
+    VRE_DE > 10 & VRE_DE <= 20 ~ "20",
+    VRE_DE > 20 & VRE_DE <= 30 ~ "30",
+    VRE_DE > 30 & VRE_DE <= 40 ~ "40",
+    VRE_DE > 40 & VRE_DE <= 50 ~ "50",
+    VRE_DE > 50 & VRE_DE <= 60 ~ "60",
+    VRE_DE > 60 & VRE_DE <= 70 ~ "70",
+    VRE_DE > 70 & VRE_DE <= 80 ~ "80",
+    VRE_DE > 80 & VRE_DE <= 90 ~ "90",
+    VRE_DE > 90 & VRE_DE <= 100 ~ "100"
+  )) %>%
+  group_by(VRE_range) %>%
+  summarise(mean_price = mean(price_NO2, na.rm = TRUE)) %>% mutate(Country="DE")
+
+VRE_price_DK <- NL %>%
+  select(datetime, price_NO2, VRE_DK) %>%
+  mutate(VRE_range = case_when(
+    VRE_DK >= 0 & VRE_DK <= 10 ~ "10",
+    VRE_DK > 10 & VRE_DK <= 20 ~ "20",
+    VRE_DK > 20 & VRE_DK <= 30 ~ "30",
+    VRE_DK > 30 & VRE_DK <= 40 ~ "40",
+    VRE_DK > 40 & VRE_DK <= 50 ~ "50",
+    VRE_DK > 50 & VRE_DK <= 60 ~ "60",
+    VRE_DK > 60 & VRE_DK <= 70 ~ "70",
+    VRE_DK > 70 & VRE_DK <= 80 ~ "80",
+    VRE_DK > 80 & VRE_DK <= 90 ~ "90",
+    VRE_DK > 90 & VRE_DK <= 100 ~ "100"
+  )) %>%
+  group_by(VRE_range) %>%
+  summarise(mean_price = mean(price_NO2, na.rm = TRUE)) %>% mutate(Country="DK")
+
+VRE_price_GB <- NL %>%
+  select(datetime, price_NO2, VRE_GB) %>%
+  mutate(VRE_range = case_when(
+    VRE_GB >= 0 & VRE_GB <= 10 ~ "10",
+    VRE_GB > 10 & VRE_GB <= 20 ~ "20",
+    VRE_GB > 20 & VRE_GB <= 30 ~ "30",
+    VRE_GB > 30 & VRE_GB <= 40 ~ "40",
+    VRE_GB > 40 & VRE_GB <= 50 ~ "50",
+    VRE_GB > 50 & VRE_GB <= 60 ~ "60",
+    VRE_GB > 60 & VRE_GB <= 70 ~ "70",
+    VRE_GB > 70 & VRE_GB <= 80 ~ "80",
+    VRE_GB > 80 & VRE_GB <= 90 ~ "90",
+    VRE_GB > 90 & VRE_GB <= 100 ~ "100"
+  )) %>%
+  group_by(VRE_range) %>%
+  summarise(mean_price = mean(price_NO2, na.rm = TRUE)) %>% mutate(Country="GB")
+
+VRE_price_NE <- NL %>%
+  select(datetime, price_NO2, VRE_NE) %>%
+  mutate(VRE_range = case_when(
+    VRE_NE >= 0 & VRE_NE <= 10 ~ "10",
+    VRE_NE > 10 & VRE_NE <= 20 ~ "20",
+    VRE_NE > 20 & VRE_NE <= 30 ~ "30",
+    VRE_NE > 30 & VRE_NE <= 40 ~ "40",
+    VRE_NE > 40 & VRE_NE <= 50 ~ "50",
+    VRE_NE > 50 & VRE_NE <= 60 ~ "60",
+    VRE_NE > 60 & VRE_NE <= 70 ~ "70",
+    VRE_NE > 70 & VRE_NE <= 80 ~ "80",
+    VRE_NE > 80 & VRE_NE <= 90 ~ "90",
+    VRE_NE > 90 & VRE_NE <= 100 ~ "100"
+  )) %>%
+  group_by(VRE_range) %>%
+  summarise(mean_price = mean(price_NO2, na.rm = TRUE)) %>% mutate(Country="NE")
+
+VRE_barplot_price <- rbind(VRE_price_DE, VRE_price_DK, VRE_price_GB, VRE_price_NE)
+
+VRE_barplot_price %>% na.omit() %>% ggplot(aes(x = as.numeric(VRE_range), y = mean_price, fill = Country, group=interaction(VRE_range, Country))) + 
+  geom_col(show.legend = FALSE) + scale_fill_manual(values = brewer_pal_p2) + theme_nice()  +
+  facet_grid(vars(Country), scales = "free_y") +
+  labs(x = "VRE Share (Percent)", y = "EUR/MWh", fill="Country", title="Average VRE Share and Price in NO2") + # Fix y-axis label
+  scale_x_continuous(breaks = seq(0, 100, by = 10)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1), panel.spacing = unit(0.5, "cm"), text = element_text(size=14))
+
+
+##
+
+VRE_barplot_9 <- NL %>% select(datetime, hour, VRE_DE, VRE_DK, VRE_GB, VRE_NE) %>% group_by(hour) %>% mutate(
+  DE = mean(VRE_DE, na.rm=TRUE),
+  GB = mean(VRE_GB, na.rm=TRUE),
+  DK = mean(VRE_DK, na.rm=TRUE),
+  NL = mean(VRE_NE, na.rm=TRUE),
+) %>% distinct(DK, .keep_all = TRUE) %>% pivot_longer(cols = DE:NL, names_to = "var", values_to = "values") %>% select(-VRE_DE, -VRE_DK, -VRE_GB, -VRE_NE) 
+
+
+VRE_barplot_9 %>% ggplot(aes(x = hour, y = values, fill = var)) + 
+  geom_col(show.legend = FALSE) + scale_fill_manual(values = brewer_pal_p2) + theme_nice()  +
+  facet_grid(vars(var), scales = "free_y") +
+  labs(x = "Hour", y = "Percent", fill="Country", title="Hourly Average VRE Share") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1)) +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=1), panel.spacing = unit(0.5, "cm"), text = element_text(size=14))
+
+## 
+
+emp_quantiles <- NL %>%
+  group_by(hour) %>%
+  summarise(
+    q05 = quantile(price_NO2, na.rm = TRUE, probs = 0.05),
+    q25 = quantile(price_NO2, na.rm = TRUE, probs = 0.25),
+    q50 = quantile(price_NO2, na.rm = TRUE, probs = 0.50),
+    q75 = quantile(price_NO2, na.rm = TRUE, probs = 0.75),
+    q95 = quantile(price_NO2, na.rm = TRUE, probs = 0.95)
+  )
+
+
+
+```
+
+# Stationarity
+
+```{r stationarity}
+
+NL %>% select(datetime, price_NO2) %>% distinct(datetime, .keep_all = TRUE) %>% as_tsibble(index=datetime) %>% gg_tsdisplay(price_NO2, plot_type='partial') + labs(title="Serial Correlation") 
+
+NL <- NL %>% na.locf()
+adf.test(NL$price_NO2, k=20)
+adf.test(NL$demand, k=10)
+adf.test(NL$NO2)
+adf.test(NL$price_NG)
+adf.test(NL$price_cert)
+adf.test(NL$temp)
+adf.test(NL$precip)
+adf.test(NL$int_DE)
+adf.test(NL$int_GB)
+adf.test(NL$int_NE)
+adf.test(NL$int_DK)
+adf.test(NL$fos_DE)
+adf.test(NL$fos_GB)
+adf.test(NL$fos_NE)
+adf.test(NL$fos_DK)
+adf.test(NL$ren_DE)
+adf.test(NL$ren_GB)
+adf.test(NL$ren_NE)
+adf.test(NL$ren_DK)
+
+library(pracma)
+
+detrend_cet <- detrend(NL$price_cert, "linear", 24) %>% as.data.frame()
+detrend_cet["trend"] <- seq(1,10970, by=1)
+detrend_cet["detrended"] <- detrend_cet$V1-NL$price_cert
+
+detrend_cet %>% ggplot(aes(x=trend, y=detrended)) + geom_line()
+
+NL %>% ggplot(aes(x=trend_time, y=price_cert)) + geom_line()
+
+```
+
+# Model
+
+```{r price NO_DE}
+
+#resample data for every hour
+NL_hourly <- NL %>%
+  mutate(hour = hour(datetime), hour1 = hour(datetime)) %>% 
+  group_by(hour) %>% 
+  nest() %>% 
+  mutate(data = map(data, ~.x %>% select(-datetime))) %>% 
+  ungroup() 
+
+set.seed(123)
+##quantile regression function. Results runs through the summary function to obtain robust errors
+quantreg_fn <- function(data, tau_vals) {
+  models <- map(tau_vals, ~ rq(price_NO2 ~ demand + NO2_diff + price_cert + price_NG + precip +
+                      weekend + is_holiday + trend_time + factor(month) +
+                      price_l2 +
+                      VRE_DE, data = data, tau = .x, method = "fn"))
+  coef_fn <- function(model) {
+    coef_df <- summary.rq(model, se = "boot")$coefficients
+    coef_df <- as.data.frame(coef_df)
+    names(coef_df) <- c("estimate", "std.error", "t.value", "p.value")
+    coef_df$term <- rownames(coef_df)
+    coef_df$tau <- model$tau
+    return(coef_df)
+  }
+  coef_list <- map(models, coef_fn)
+  coef_df <- do.call(rbind, coef_list)
+  return(coef_df)
+}
+
+#run regression for each hour and quantile
+tau_vals <- c(0.05, 0.25, 0.5, 0.75, 0.95)
+NL_hourly_quantreg <- NL_hourly %>% 
+  mutate(model = map(data, ~quantreg_fn(.x, tau_vals)))
+
+
+#creating a dataframe
+qreg_boot_DE <- lapply(NL_hourly_quantreg$model, as.data.frame) %>% bind_rows(.id = "hour")
+rownames(qreg_boot_DE) <- 1:nrow(qreg_boot_DE)
+qreg_boot_DE$hour <- as.numeric(qreg_boot_DE$hour)
+qreg_boot_DE <- qreg_boot_DE %>% group_by(p.value) %>% mutate(
+  hour=hour-1
+)
+
+
+```
+
+```{r price NO_DK}
+
+set.seed(123)
+##quantile regression function. Results runs through the summary function to obtain robust errors
+quantreg_fn <- function(data, tau_vals) {
+  models <- map(tau_vals, ~ rq(price_NO2 ~ demand + NO2_diff + price_cert + price_NG + precip +
+                      weekend + is_holiday + trend_time + factor(month) +
+                      price_l2 +
+                      VRE_DK, data = data, tau = .x, method = "fn"))
+  coef_fn <- function(model) {
+    coef_df <- summary.rq(model, se = "boot")$coefficients
+    coef_df <- as.data.frame(coef_df)
+    names(coef_df) <- c("estimate", "std.error", "t.value", "p.value")
+    coef_df$term <- rownames(coef_df)
+    coef_df$tau <- model$tau
+    return(coef_df)
+  }
+  coef_list <- map(models, coef_fn)
+  coef_df <- do.call(rbind, coef_list)
+  return(coef_df)
+}
+
+#run regression for each hour and quantile
+tau_vals <- c(0.05, 0.25, 0.5, 0.75, 0.95)
+NL_hourly_quantreg <- NL_hourly %>% 
+  mutate(model = map(data, ~quantreg_fn(.x, tau_vals)))
+
+
+#creating a dataframe
+qreg_boot_DK <- lapply(NL_hourly_quantreg$model, as.data.frame) %>% bind_rows(.id = "hour")
+rownames(qreg_boot_DK) <- 1:nrow(qreg_boot_DK)
+qreg_boot_DK$hour <- as.numeric(qreg_boot_DK$hour)
+qreg_boot_DK <- qreg_boot_DK %>% group_by(p.value) %>% mutate(
+  hour=hour-1
+)
+
+
+```
+
+```{r price NO_NE}
+
+set.seed(123)
+##quantile regression function. Results runs through the summary function to obtain robust errors
+quantreg_fn <- function(data, tau_vals) {
+  models <- map(tau_vals, ~ rq(price_NO2 ~ demand + NO2_diff + price_cert + price_NG + precip +
+                      weekend + is_holiday + trend_time + factor(month) +
+                      price_l2 +
+                      VRE_NE, data = data, tau = .x, method = "fn"))
+  coef_fn <- function(model) {
+    coef_df <- summary.rq(model, se = "boot")$coefficients
+    coef_df <- as.data.frame(coef_df)
+    names(coef_df) <- c("estimate", "std.error", "t.value", "p.value")
+    coef_df$term <- rownames(coef_df)
+    coef_df$tau <- model$tau
+    return(coef_df)
+  }
+  coef_list <- map(models, coef_fn)
+  coef_df <- do.call(rbind, coef_list)
+  return(coef_df)
+}
+
+#run regression for each hour and quantile
+tau_vals <- c(0.05, 0.25, 0.5, 0.75, 0.95)
+NL_hourly_quantreg <- NL_hourly %>% 
+  mutate(model = map(data, ~quantreg_fn(.x, tau_vals)))
+
+
+#creating a dataframe
+qreg_boot_NE <- lapply(NL_hourly_quantreg$model, as.data.frame) %>% bind_rows(.id = "hour")
+rownames(qreg_boot_NE) <- 1:nrow(qreg_boot_NE)
+qreg_boot_NE$hour <- as.numeric(qreg_boot_NE$hour)
+qreg_boot_NE <- qreg_boot_NE %>% group_by(p.value) %>% mutate(
+  hour=hour-1
+)
+
+
+```
+
+```{r price NO_GB}
+
+set.seed(123)
+##quantile regression function. Results runs through the summary function to obtain robust errors
+quantreg_fn <- function(data, tau_vals) {
+  models <- map(tau_vals, ~ rq(price_NO2 ~ demand + NO2_diff + price_cert + price_NG + precip +
+                      weekend + is_holiday + trend_time + factor(month) +
+                      price_l2 +
+                      VRE_GB, data = data, tau = .x, method = "fn"))
+  coef_fn <- function(model) {
+    coef_df <- summary.rq(model, se = "boot")$coefficients
+    coef_df <- as.data.frame(coef_df)
+    names(coef_df) <- c("estimate", "std.error", "t.value", "p.value")
+    coef_df$term <- rownames(coef_df)
+    coef_df$tau <- model$tau
+    return(coef_df)
+  }
+  coef_list <- map(models, coef_fn)
+  coef_df <- do.call(rbind, coef_list)
+  return(coef_df)
+}
+
+#run regression for each hour and quantile
+tau_vals <- c(0.05, 0.25, 0.5, 0.75, 0.95)
+NL_hourly_quantreg <- NL_hourly %>% 
+  mutate(model = map(data, ~quantreg_fn(.x, tau_vals)))
+
+
+#creating a dataframe
+qreg_boot_GB <- lapply(NL_hourly_quantreg$model, as.data.frame) %>% bind_rows(.id = "hour")
+rownames(qreg_boot_GB) <- 1:nrow(qreg_boot_GB)
+qreg_boot_GB$hour <- as.numeric(qreg_boot_GB$hour)
+qreg_boot_GB <- qreg_boot_GB %>% group_by(p.value) %>% mutate(
+  hour=hour-1
+)
+
+
+```
+
+
+# Results
+
+## Germany
+
+```{r results_DE}
+
+qreg_boot_DE <- qreg_boot_DE %>% mutate(
+  sig = ifelse(p.value<=0.05, estimate, NA)
+)
+
+# test bootstrapping
+qreg_boot_DE %>% filter(term=="VRE_DE") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "VRE Share Germany", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="price_NG") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient Value", title = "Gas Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="price_cert") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "El-Certificate Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="demand") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Demand", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="precip") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Precipitation", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="NO2_diff") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Reservoir Level NO2", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="is_holiday") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Holiday", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="weekend") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Weekend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="trend_time") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Trend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DE %>% filter(term=="price_l2") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Price Lag 1 Day", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+
+```
+
+## United Kingdom
+
+```{r results_GB}
+
+qreg_boot_GB <- qreg_boot_GB %>% mutate(
+  sig = ifelse(p.value<=0.05, estimate, NA)
+)
+
+# test bootstrapping
+qreg_boot_GB %>% filter(term=="VRE_GB") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "VRE Share United Kingdom", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="price_NG") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient Value", title = "Gas Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="price_cert") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "El-Certificate Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="demand") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Demand", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="precip") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Precipitation", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="NO2_diff") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Reservoir Level NO2", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="is_holiday") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Holiday", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="weekend") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Weekend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="trend_time") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Trend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_GB %>% filter(term=="price_l2") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Price Lag 1 Day", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+
+```
+
+## Denmark
+
+```{r results_DK}
+
+qreg_boot_DK <- qreg_boot_DK %>% mutate(
+  sig = ifelse(p.value<=0.05, estimate, NA)
+)
+
+# test bootstrapping
+qreg_boot_DK %>% filter(term=="VRE_DK") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "VRE Share Denmark", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="price_NG") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient Value", title = "Gas Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="price_cert") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "El-Certificate Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="demand") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Demand", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="precip") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Precipitation", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="NO2_diff") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Reservoir Level NO2", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="is_holiday") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Holiday", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="weekend") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Weekend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="trend_time") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Trend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_DK %>% filter(term=="price_l2") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Price Lag 1 Day", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+
+```
+
+## Netherlands
+
+```{r results_NE}
+
+qreg_boot_NE <- qreg_boot_NE %>% mutate(
+  sig = ifelse(p.value<=0.05, estimate, NA)
+)
+
+# test bootstrapping
+qreg_boot_NE %>% filter(term=="VRE_NE") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "VRE Share Netherlands", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="price_NG") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient Value", title = "Gas Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="price_cert") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "El-Certificate Price", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="demand") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Demand", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="precip") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Precipitation", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="NO2_diff") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Reservoir Level NO2", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="is_holiday") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Holiday", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="weekend") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Weekend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="trend_time") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Trend", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+qreg_boot_NE %>% filter(term=="price_l2") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  geom_point(aes(y=sig, group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 2) +
+  labs(x = "Hour", y = "Coefficient value", title = "Price Lag 1 Day", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() +
+    theme(strip.text = element_blank()) + scale_color_manual(values = c("#081d58", "#225EA8", "#7FCDBB", "#DDDD9D", "#999F55"))
+
+
+```
+
+
+# Appendix
+
+```{r appendix}
+
+qreg_boot_appendix_1 <- qreg_boot
+
+qreg_boot_appendix_1$term <- str_replace(qreg_boot_appendix_1$term, pattern = "factor(month)2", replacement = "February")
+
+qreg_boot_appendix_1 %>% filter(term=="factor(month)2" | term=="factor(month)3" | term=="factor(month)4" | term=="factor(month)5" | term=="factor(month)6" | term=="factor(month)7" | term=="factor(month)8" | term=="factor(month)9" | term=="factor(month)10" | term=="factor(month)11" | term=="factor(month)12") %>%
+  ggplot(aes(x = hour, y = estimate, color = as.factor(tau), group = interaction(term, tau))) +
+  geom_line(aes(group = interaction(term, tau))) +
+  facet_wrap(~ term, scales = "free_y", ncol = 4) +
+  labs(x = "Hour", y = "Coefficient value", title = " Month", color="Quantile") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_nice() 
+
+```
